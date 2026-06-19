@@ -990,14 +990,18 @@ _CONFIGS = [
     TrainConfig(
         # Same as `pi05_droid100_extended_lerobot`, but on the v2 extended dataset: DROID-100 plus the
         # `toys-no-collision-v2/success` trajectories, built by
-        # `examples/droid/convert_combined_droid_toys_to_lerobot.py`. Identical DROID joint schema, so norm
-        # stats are computed/read from this config's own assets dir
-        # (`assets/pi05_droid100_extended_v2_lerobot/samratsahoo/droid_100_extended_v2/`).
+        # `examples/droid/convert_combined_droid_toys_to_lerobot.py`. Identical DROID joint schema, so we reuse
+        # the official pi05-DROID norm stats (`gs://openpi-assets/checkpoints/pi05_droid/assets`, asset_id
+        # `droid`) to keep normalization consistent with the base checkpoint we fine-tune from.
         name="pi05_droid100_extended_v2_lerobot",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
         data=LeRobotDROIDDataConfig(
             repo_id="samratsahoo/droid_100_extended_v2",
             base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
@@ -1006,9 +1010,8 @@ _CONFIGS = [
     TrainConfig(
         # LoRA fine-tune of pi05-DROID on the v2 extended dataset (DROID-100 + toys-no-collision-v2). Same
         # data/schema as `pi05_droid100_extended_v2_lerobot`, but with LoRA adapters on both the VLM and
-        # action expert so it fits on a single GPU. Norm stats are reused from the
-        # `pi05_droid100_extended_v2_lerobot` assets dir (identical dataset + data transforms), so no
-        # separate compute_norm_stats run is needed.
+        # action expert so it fits on a single GPU. Like the full-finetune config, we reuse the official
+        # pi05-DROID norm stats so no compute_norm_stats run is needed.
         name="pi05_droid100_extended_v2_lora",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -1019,7 +1022,10 @@ _CONFIGS = [
         ),
         data=LeRobotDROIDDataConfig(
             repo_id="samratsahoo/droid_100_extended_v2",
-            assets=AssetsConfig(assets_dir="./assets/pi05_droid100_extended_v2_lerobot"),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
@@ -1043,13 +1049,21 @@ _CONFIGS = [
         # binary reconstruction), a real second exterior camera, and dense 15 Hz frames -- via
         # `examples/droid/convert_toys_lerobot_to_droid.py` + `examples/droid/merge_lerobot_datasets.py`.
         # (v2 was the older plan-derived build with a binary gripper and a duplicated exterior_2.) Identical
-        # DROID joint schema, so norm stats are computed/read from this config's own assets dir
-        # (`assets/pi05_droid100_extended_v3_lerobot/samratsahoo/droid_100_extended_v3/`).
+        # DROID joint schema, so we reuse the official pi05-DROID norm stats
+        # (`gs://openpi-assets/checkpoints/pi05_droid/assets`, asset_id `droid`) rather than computing fresh
+        # ones -- this keeps normalization consistent with the base checkpoint we fine-tune from.
         name="pi05_droid100_extended_v3_lerobot",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
         data=LeRobotDROIDDataConfig(
             repo_id="samratsahoo/droid_100_extended_v3",
             base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                # Reuse the original DROID norm stats during fine-tuning so inputs/outputs stay in the
+                # normalized space the pi05-DROID base checkpoint was trained on (identical DROID joint
+                # schema). No compute_norm_stats run is needed for this config.
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
@@ -1058,9 +1072,8 @@ _CONFIGS = [
     TrainConfig(
         # LoRA fine-tune of pi05-DROID on the v3 extended dataset (DROID-100 + corrected toys-no-collision-v2).
         # Same data/schema as `pi05_droid100_extended_v3_lerobot`, but with LoRA adapters on both the VLM and
-        # action expert so it fits on a single GPU. Norm stats are reused from the
-        # `pi05_droid100_extended_v3_lerobot` assets dir (identical dataset + data transforms), so no separate
-        # compute_norm_stats run is needed.
+        # action expert so it fits on a single GPU. Like the full-finetune config, we reuse the official
+        # pi05-DROID norm stats so no compute_norm_stats run is needed.
         name="pi05_droid100_extended_v3_lora",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -1071,7 +1084,10 @@ _CONFIGS = [
         ),
         data=LeRobotDROIDDataConfig(
             repo_id="samratsahoo/droid_100_extended_v3",
-            assets=AssetsConfig(assets_dir="./assets/pi05_droid100_extended_v3_lerobot"),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
             base_config=DataConfig(prompt_from_task=True),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
