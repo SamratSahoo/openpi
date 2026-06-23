@@ -1105,6 +1105,40 @@ _CONFIGS = [
         # EMA is off for LoRA fine-tuning.
         ema_decay=None,
     ),
+    TrainConfig(
+        # Full fine-tune of the *base* pi0.5 checkpoint (gs://.../pi05_base, NOT the DROID-specialized
+        # pi05_droid checkpoint) on DROID-100 (joint schema). Because we start from the generalist base
+        # rather than the DROID model, the official DROID norm stats no longer apply: `assets` is left at
+        # the local default so norm stats are computed fresh and read from this config's own assets dir
+        # (`assets/pi05_droid100_from_base_lerobot/samratsahoo/droid_100_joint/`). Run
+        # `scripts/compute_norm_stats.py --config-name pi05_droid100_from_base_lerobot` BEFORE training.
+        name="pi05_droid100_from_base_lerobot",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id="samratsahoo/droid_100_joint",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=20_000,
+        batch_size=32,
+    ),
+    TrainConfig(
+        # Full fine-tune of the *base* pi0.5 checkpoint (gs://.../pi05_base, NOT pi05_droid) on the v3
+        # extended dataset (DROID-100 + corrected toys-no-collision-v2). As with the from-base DROID-100
+        # config, starting from the generalist base means we cannot reuse the official DROID norm stats, so
+        # `assets` is left at the local default and stats are computed fresh into this config's own assets
+        # dir (`assets/pi05_droid100_extended_v3_from_base_lerobot/samratsahoo/droid_100_extended_v3/`). Run
+        # `scripts/compute_norm_stats.py --config-name pi05_droid100_extended_v3_from_base_lerobot` first.
+        name="pi05_droid100_extended_v3_from_base_lerobot",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id="samratsahoo/droid_100_extended_v3",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=20_000,
+        batch_size=32,
+    ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #

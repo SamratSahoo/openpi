@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=openpi-train-extended-v2
+#SBATCH --job-name=openpi-train-extended-v3
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
@@ -12,11 +12,11 @@
 # to cluster admins). Drop this line once neu306 is fixed.
 #SBATCH --exclude=neu306
 #SBATCH --time=3-00:00:00
-#SBATCH --output=/n/fs/tamp-vla/tamp-vla/openpi/slurm/logs/train_extended_v2_%j.out
-#SBATCH --error=/n/fs/tamp-vla/tamp-vla/openpi/slurm/logs/train_extended_v2_%j.err
+#SBATCH --output=/n/fs/tamp-vla/tamp-vla/openpi/slurm/logs/train_extended_v3_%j.out
+#SBATCH --error=/n/fs/tamp-vla/tamp-vla/openpi/slurm/logs/train_extended_v3_%j.err
 #
 # Neuronic equivalent of run_train_droid100.slurm (Della) -- FULL fine-tune of pi0.5 on the
-# combined DROID-100 + toys-no-collision dataset (pi05_droid100_extended_v2_lerobot).
+# combined DROID-100 + corrected toys-no-collision-v2 dataset (pi05_droid100_extended_v3_lerobot).
 #
 # Why this differs from the Della script:
 #   * Full fine-tuning needs >70 GB; an L40 has only ~46 GB, so a single GPU cannot hold the
@@ -27,7 +27,7 @@
 #     no `module load proxy/default` (Neuronic compute nodes have direct internet).
 #
 # Prereqs: run the convert -> merge -> norm-stats jobs first (they build samratsahoo/
-# droid_100_extended_v2 and its assets/ norm stats). The pi0.5-DROID base checkpoint is pulled
+# droid_100_extended_v3 and its assets/ norm stats). The pi0.5-DROID base checkpoint is pulled
 # from gs://openpi-assets into $OPENPI_DATA_HOME on first run.
 
 set -euo pipefail
@@ -46,10 +46,10 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 
 cd /n/fs/tamp-vla/tamp-vla/openpi
 
-echo "=== Full fine-tune pi05_droid100_extended_v2_lerobot (8x L40, FSDP=8) on $(hostname) at $(date) ==="
+echo "=== Full fine-tune pi05_droid100_extended_v3_lerobot (8x L40, FSDP=8) on $(hostname) at $(date) ==="
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
-uv run --frozen scripts/train.py pi05_droid100_extended_v2_lerobot \
-    --exp-name=droid100_extended_v2_full_ft \
+uv run --frozen scripts/train.py pi05_droid100_extended_v3_lerobot \
+    --exp-name=droid100_extended_v3_full_ft \
     --fsdp-devices 8 \
     --overwrite
 echo "=== Done at $(date) ==="
