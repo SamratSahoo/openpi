@@ -17,7 +17,7 @@ Output schema (matches examples/droid/convert_droid_data_to_lerobot.py):
 Usage (set HF_LEROBOT_HOME first so the dataset lands on scratch, not $HOME):
   uv run --group rlds examples/droid/convert_droid_rlds_to_lerobot.py \
       --rlds-data-dir /path/to/droid_rlds --builder-name r2d2_faceblur --version 1.0.0 \
-      --repo-id samratsahoo/droid_100_joint
+      --repo-id SamratSahoo/d100
 """
 
 import shutil

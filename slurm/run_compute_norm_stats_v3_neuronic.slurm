@@ -14,8 +14,8 @@
 # Neuronic equivalent of run_compute_norm_stats.slurm (Della), targeting the EXTENDED v3 config
 # (DROID-100 + corrected toys-no-collision-v2) instead of v2/droid100-only.
 #
-# README step 7.4: compute norm stats into assets/pi05_droid100_extended_v3_lerobot/ BEFORE training.
-# Run after the merge job has produced samratsahoo/droid_100_extended_v3.
+# README step 7.4: compute norm stats into assets/pi05droid-full-d100+toys/ BEFORE training.
+# Run after the merge job has produced SamratSahoo/d100_toys20.
 
 set -euo pipefail
 
@@ -28,6 +28,6 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 
 cd /n/fs/tamp-vla/tamp-vla/openpi
 
-echo "=== Computing norm stats for pi05_droid100_extended_v3_lerobot on $(hostname) at $(date) ==="
-uv run --frozen scripts/compute_norm_stats.py --config-name pi05_droid100_extended_v3_lerobot
+echo "=== Computing norm stats for pi05droid-full-d100+toys on $(hostname) at $(date) ==="
+uv run --frozen scripts/compute_norm_stats.py --config-name pi05droid-full-d100+toys
 echo "=== Done at $(date) ==="

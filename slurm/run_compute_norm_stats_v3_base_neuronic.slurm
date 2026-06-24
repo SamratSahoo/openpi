@@ -14,8 +14,8 @@
 # Compute norm stats for the EXTENDED v3 dataset (DROID-100 + corrected toys-no-collision-v2) when
 # fine-tuning starts from the *base* pi0.5 checkpoint (pi05_base) rather than the DROID-specialized
 # pi05_droid checkpoint. Because we no longer reuse the official DROID norm stats, fresh stats must be
-# computed into this config's own assets dir (assets/pi05_droid100_extended_v3_from_base_lerobot/)
-# BEFORE training. Run after the merge job has produced samratsahoo/droid_100_extended_v3.
+# computed into this config's own assets dir (assets/pi05base-full-d100+toys/)
+# BEFORE training. Run after the merge job has produced SamratSahoo/d100_toys20.
 
 set -euo pipefail
 
@@ -28,6 +28,6 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 
 cd /n/fs/tamp-vla/tamp-vla/openpi
 
-echo "=== Computing norm stats for pi05_droid100_extended_v3_from_base_lerobot on $(hostname) at $(date) ==="
-uv run --frozen scripts/compute_norm_stats.py --config-name pi05_droid100_extended_v3_from_base_lerobot
+echo "=== Computing norm stats for pi05base-full-d100+toys on $(hostname) at $(date) ==="
+uv run --frozen scripts/compute_norm_stats.py --config-name pi05base-full-d100+toys
 echo "=== Done at $(date) ==="

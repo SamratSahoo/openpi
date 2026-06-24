@@ -22,6 +22,6 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 cd /scratch/gpfs/TSILVER/ss1824/openpi
 
 module load proxy/default
-echo "=== Fine-tuning pi05_droid100_lerobot (DROID-100 joint, fresh norm stats) on $(hostname) at $(date) ==="
-uv run --frozen scripts/train.py pi05_droid100_lerobot --exp-name=droid100_joint_ft --overwrite
+echo "=== Fine-tuning pi05droid-full-d100 (DROID-100 joint, fresh norm stats) on $(hostname) at $(date) ==="
+uv run --frozen scripts/train.py pi05droid-full-d100 --exp-name=droid100_joint_ft --overwrite
 echo "=== Done at $(date) ==="

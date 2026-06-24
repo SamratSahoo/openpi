@@ -20,6 +20,6 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 cd /scratch/gpfs/TSILVER/ss1824/openpi
 
 module load proxy/default
-echo "=== Computing norm stats for pi05_droid100_lerobot on $(hostname) at $(date) ==="
-uv run --frozen scripts/compute_norm_stats.py --config-name pi05_droid100_lerobot
+echo "=== Computing norm stats for pi05droid-full-d100 on $(hostname) at $(date) ==="
+uv run --frozen scripts/compute_norm_stats.py --config-name pi05droid-full-d100
 echo "=== Done at $(date) ==="

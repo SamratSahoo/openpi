@@ -16,7 +16,7 @@
 #SBATCH --error=/n/fs/tamp-vla/tamp-vla/openpi/slurm/logs/train_extended_v3_%j.err
 #
 # Neuronic equivalent of run_train_droid100.slurm (Della) -- FULL fine-tune of pi0.5 on the
-# combined DROID-100 + corrected toys-no-collision-v2 dataset (pi05_droid100_extended_v3_lerobot).
+# combined DROID-100 + corrected toys-no-collision-v2 dataset (pi05droid-full-d100+toys).
 #
 # Why this differs from the Della script:
 #   * Full fine-tuning needs >70 GB; an L40 has only ~46 GB, so a single GPU cannot hold the
@@ -46,9 +46,9 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 
 cd /n/fs/tamp-vla/tamp-vla/openpi
 
-echo "=== Full fine-tune pi05_droid100_extended_v3_lerobot (8x L40, FSDP=8) on $(hostname) at $(date) ==="
+echo "=== Full fine-tune pi05droid-full-d100+toys (8x L40, FSDP=8) on $(hostname) at $(date) ==="
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
-uv run --frozen scripts/train.py pi05_droid100_extended_v3_lerobot \
+uv run --frozen scripts/train.py pi05droid-full-d100+toys \
     --exp-name=droid100_extended_v3_full_ft \
     --fsdp-devices 8 \
     --overwrite

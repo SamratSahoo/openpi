@@ -3,9 +3,9 @@
 Use this when both inputs are already in LeRobot format (local under `$HF_LEROBOT_HOME` or pullable
 from the Hub) and you just want to concatenate them, e.g.
 
-    samratsahoo/droid_100_joint  (DROID-100, 100 eps)
-  + samratsahoo/droid-toys-no-collision  (tamp-vla toys, 20 eps)
-  = samratsahoo/droid_100_extended  (120 eps)
+    SamratSahoo/d100  (DROID-100, 100 eps)
+  + SamratSahoo/toys20  (tamp-vla toys, 20 eps)
+  = SamratSahoo/d100_toys20  (120 eps)
 
 This is different from `convert_combined_droid_toys_to_lerobot.py`, which *builds* a combined dataset
 from the raw sources (DROID RLDS + raw toys trajectory folders). That script is the right tool when you
@@ -13,14 +13,14 @@ have the raw data; THIS script is the right tool when you already have two finis
 
 All sources must share the standard DROID **joint** schema (8-dim action = 7 joint velocities + gripper)
 produced by the other converters in this directory, so the merged dataset loads directly through
-`LeRobotDROIDDataConfig` (e.g. `pi05_droid100_extended_v2_lerobot`) and norm stats can be recomputed
+`LeRobotDROIDDataConfig` (e.g. `pi05droid-full-d100+toys`) and norm stats can be recomputed
 with the same config. Episodes are copied verbatim (per-episode 15 Hz timeline rebuilt by `add_frame`);
 each source's language instructions are carried over.
 
 Usage:
   uv run examples/droid/merge_lerobot_datasets.py \
-      --sources samratsahoo/droid_100_joint samratsahoo/droid-toys-no-collision \
-      --repo-id samratsahoo/droid_100_extended --push-to-hub
+      --sources SamratSahoo/d100 SamratSahoo/toys20 \
+      --repo-id SamratSahoo/d100_toys20 --push-to-hub
 """
 
 import shutil

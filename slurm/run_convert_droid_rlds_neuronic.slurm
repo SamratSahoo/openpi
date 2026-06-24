@@ -41,5 +41,5 @@ echo "=== Converting r2d2_faceblur RLDS -> LeRobot (joint space) at $(date) ==="
 uv run --group rlds --frozen examples/droid/convert_droid_rlds_to_lerobot.py \
     --rlds-data-dir "$RLDS_DIR" \
     --builder-name r2d2_faceblur --version 1.0.0 \
-    --repo-id samratsahoo/droid_100_joint
+    --repo-id SamratSahoo/d100
 echo "=== Done at $(date) ==="

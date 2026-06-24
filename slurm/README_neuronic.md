@@ -2,7 +2,7 @@
 
 These `*_neuronic.slurm` scripts are the **Neuronic-cluster equivalents** of the Della
 (`run_*.slurm`) scripts, set up to **full fine-tune π₀.₅** on the combined
-**DROID-100 + toys-no-collision** dataset (`pi05_droid100_extended_v2_lerobot`).
+**DROID-100 + toys-no-collision** dataset (`pi05droid-full-d100+toys`).
 
 ## What changed vs the Della scripts
 - **Caches on the project FS.** Home (`/u/<user>`) has only ~16 GB, so all caches point at the
@@ -18,18 +18,18 @@ These `*_neuronic.slurm` scripts are the **Neuronic-cluster equivalents** of the
 ## Run order
 ```bash
 cd /n/fs/tamp-vla/tamp-vla/openpi
-# 1. DROID-100 raw RLDS -> LeRobot (downloads + converts -> samratsahoo/droid_100_joint)
+# 1. DROID-100 raw RLDS -> LeRobot (downloads + converts -> SamratSahoo/d100)
 sbatch slurm/run_convert_droid_rlds_neuronic.slurm
-# 2. merge with toys-no-collision -> samratsahoo/droid_100_extended_v2
-sbatch slurm/run_merge_datasets_neuronic.slurm
+# 2. merge with toys-no-collision -> SamratSahoo/d100_toys20
+sbatch slurm/run_merge_datasets_v3_neuronic.slurm
 # 3. norm stats for the extended config
-sbatch slurm/run_compute_norm_stats_neuronic.slurm
+sbatch slurm/run_compute_norm_stats_v3_neuronic.slurm
 # 4. full fine-tune (8×L40, FSDP=8)
-sbatch slurm/run_train_neuronic.slurm
+sbatch slurm/run_train_v3_neuronic.slurm
 # (optional) quick multi-GPU sanity check of the train loop
 sbatch slurm/run_train_test_neuronic.slurm
 ```
 Chain them so each waits for the previous: `sbatch --dependency=afterok:<JOBID> ...`.
 
 Logs land in `slurm/logs/`. W&B logs online once you run `wandb login` on the login node;
-otherwise uncomment `export WANDB_MODE=offline` in `run_train_neuronic.slurm`.
+otherwise uncomment `export WANDB_MODE=offline` in `run_train_v3_neuronic.slurm`.

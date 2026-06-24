@@ -3,7 +3,7 @@
 This is `convert_droid_rlds_to_lerobot.py` plus a second source: a directory of "tamp-vla" style
 successful trajectories (each a folder with a `tiptop_plan.json` dense plan + raw camera mp4s). Both
 sources are written into ONE dataset with the standard DROID **joint** schema (8-dim: 7 joints +
-gripper), so the result loads directly through `LeRobotDROIDDataConfig` (see `pi05_droid100_lerobot`)
+gripper), so the result loads directly through `LeRobotDROIDDataConfig` (see `pi05droid-full-d100`)
 and norm stats can be recomputed with the same config.
 
 Why we read `tiptop_plan.json` (NOT the trajectory's `_lerobot_raw.json` / `le-robot/`):

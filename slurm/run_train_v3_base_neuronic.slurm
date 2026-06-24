@@ -20,7 +20,7 @@
 # see that script for the FSDP rationale.
 #
 # Prereq: run run_compute_norm_stats_v3_base_neuronic.slurm first so the fresh norm stats exist in
-# assets/pi05_droid100_extended_v3_from_base_lerobot/ (we do NOT reuse the official DROID stats here). The
+# assets/pi05base-full-d100+toys/ (we do NOT reuse the official DROID stats here). The
 # pi05_base checkpoint is pulled from gs://openpi-assets into $OPENPI_DATA_HOME on first run.
 
 set -euo pipefail
@@ -34,9 +34,9 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.9
 
 cd /n/fs/tamp-vla/tamp-vla/openpi
 
-echo "=== Full fine-tune pi05_droid100_extended_v3_from_base_lerobot (8x L40, FSDP=8) on $(hostname) at $(date) ==="
+echo "=== Full fine-tune pi05base-full-d100+toys (8x L40, FSDP=8) on $(hostname) at $(date) ==="
 nvidia-smi --query-gpu=index,name,memory.total --format=csv
-uv run --frozen scripts/train.py pi05_droid100_extended_v3_from_base_lerobot \
+uv run --frozen scripts/train.py pi05base-full-d100+toys \
     --exp-name=droid100_extended_v3_from_base_full_ft \
     --fsdp-devices 8 \
     --overwrite

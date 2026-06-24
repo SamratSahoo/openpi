@@ -13,14 +13,14 @@ dense plan. Compared to the plan-derived build, the v2 export fixes three things
 We read each export's data parquet (joint_position[7], gripper_position[1], action[8]) plus its three
 av1 videos (exterior_1_left / exterior_2_left / wrist_left), which are 1:1 aligned with the rows, and
 re-emit them in the standard DROID **joint** schema so the result loads directly through
-`LeRobotDROIDDataConfig` and merges with `samratsahoo/droid_100_joint` via merge_lerobot_datasets.py.
+`LeRobotDROIDDataConfig` and merges with `SamratSahoo/d100` via merge_lerobot_datasets.py.
 (observation.cartesian_position is present in the export but dropped here -- pi05-DROID does not use it
 and droid_100_joint does not carry it.)
 
 Usage:
   uv run examples/droid/convert_toys_lerobot_to_droid.py \
       --toys-dir /home/samrat/tamp-vla/tamp-vla-data/toys-no-collision-v2/success \
-      --repo-id samratsahoo/droid-toys-no-collision --push-to-hub
+      --repo-id SamratSahoo/toys20 --push-to-hub
 """
 
 import glob

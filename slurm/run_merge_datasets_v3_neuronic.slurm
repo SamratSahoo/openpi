@@ -13,9 +13,9 @@
 # Neuronic-only step (no Della equivalent): builds the COMBINED DROID-100 + toys-no-collision
 # dataset that the full-finetune config trains on (v3 build).
 #
-# README step 7.3: merge samratsahoo/droid_100_joint (from run_convert_droid_rlds_neuronic.slurm)
-# with SamratSahoo/droid-toys-no-collision (the corrected toys-no-collision-v2 build, pulled from
-# the Hub) -> samratsahoo/droid_100_extended_v3, the repo_id used by pi05_droid100_extended_v3_lerobot.
+# README step 7.3: merge SamratSahoo/d100 (from run_convert_droid_rlds_neuronic.slurm)
+# with SamratSahoo/toys20 (the corrected toys-no-collision-v2 build, pulled from
+# the Hub) -> SamratSahoo/d100_toys20, the repo_id used by pi05droid-full-d100+toys.
 # CPU/IO bound (video re-encode) -> no GPU. Add --push-to-hub to publish.
 #
 # NOTE: re-pull the latest toys version BEFORE this job (delete the stale cache so LeRobotDataset
@@ -33,6 +33,6 @@ cd /n/fs/tamp-vla/tamp-vla/openpi
 
 echo "=== Merging droid_100_joint + droid-toys-no-collision -> droid_100_extended_v3 on $(hostname) at $(date) ==="
 uv run --frozen examples/droid/merge_lerobot_datasets.py \
-    --sources samratsahoo/droid_100_joint samratsahoo/droid-toys-no-collision \
-    --repo-id samratsahoo/droid_100_extended_v3
+    --sources SamratSahoo/d100 SamratSahoo/toys20 \
+    --repo-id SamratSahoo/d100_toys20
 echo "=== Done at $(date) ==="
