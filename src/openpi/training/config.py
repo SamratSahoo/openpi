@@ -1016,6 +1016,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
     # Pi 0.5 DROID - Full Finetune on Toys 100 (Sim) - Own Norm Stats
     TrainConfig(
@@ -1028,6 +1029,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
     # Base - Full Finetune on DROID-100 + Toys 100 (Sim) - Own Norm Stats
     TrainConfig(
@@ -1040,6 +1042,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
     # Pi 0.5 DROID - Full Finetune on DROID-100 + Toys 100 (Sim) - DROID (Original) Norm Stats
     TrainConfig(
@@ -1056,6 +1059,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
     # Base - Full Finetune on Toys 20 (Sim) - Own Norm Stats
     TrainConfig(
@@ -1068,6 +1072,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
     # Pi 0.5 DROID - Full Finetune on Toys 20 (Sim) - Own Norm Stats
     TrainConfig(
@@ -1080,6 +1085,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
     # Base - Full Finetune on DROID-100 + Toys 20 (Sim) - Own Norm Stats
     TrainConfig(
@@ -1092,6 +1098,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
     # Pi 0.5 DROID - Full Finetune on DROID-100 + Toys 20 (Sim) - DROID (Original) Norm Stats
     TrainConfig(
@@ -1108,6 +1115,7 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+        save_interval=10000,
     ),
 
     #
