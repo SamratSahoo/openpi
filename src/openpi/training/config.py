@@ -1018,13 +1018,17 @@ _CONFIGS = [
         batch_size=32,
         save_interval=10000,
     ),
-    # Pi 0.5 DROID - Full Finetune on Toys 100 (Sim) - Own Norm Stats
+    # Pi 0.5 DROID - Full Finetune on Toys 100 (Sim) - DROID (Original) Norm Stats
     TrainConfig(
         name="pi05droid-toys100sim",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
         data=LeRobotDROIDDataConfig(
             repo_id="SamratSahoo/toys100_sim",
             base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
@@ -1074,13 +1078,17 @@ _CONFIGS = [
         batch_size=32,
         save_interval=10000,
     ),
-    # Pi 0.5 DROID - Full Finetune on Toys 20 (Sim) - Own Norm Stats
+    # Pi 0.5 DROID - Full Finetune on Toys 20 (Sim) - DROID (Original) Norm Stats
     TrainConfig(
         name="pi05droid-toys20sim",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
         data=LeRobotDROIDDataConfig(
             repo_id="SamratSahoo/toys20_sim",
             base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
