@@ -1125,7 +1125,66 @@ _CONFIGS = [
         batch_size=32,
         save_interval=10000,
     ),
-
+    # Base - Full Finetune on DROID-100 + Toys 300 (Sim) - Own Norm Stats
+    TrainConfig(
+        name="pi05base-full-d100+toys300sim",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id="SamratSahoo/d100_toys300_sim",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=10000,
+    ),
+    # Pi 0.5 DROID - Full Finetune on DROID-100 + Toys 300 (Sim) - DROID Norm Stats
+    TrainConfig(
+        name="pi05droid-full-d100+toys300sim",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id="SamratSahoo/d100_toys300_sim",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=10000,
+    ),
+    # Base - Full Finetune on Toys 300 (Sim) - Own Norm Stats
+    TrainConfig(
+        name="pi05base-toys300sim",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id="SamratSahoo/toys300_sim",
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=10000,
+    ),
+    # Pi 0.5 DROID - Full Finetune Toys 300 (Sim) - DROID Norm Stats
+    TrainConfig(
+        name="pi05droid-toys300sim",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id="SamratSahoo/toys300_sim",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=10000,
+    ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
     #
