@@ -45,6 +45,7 @@ import openpi.models_pytorch.pi0_pytorch
 import openpi.shared.normalize as _normalize
 import openpi.training.config as _config
 import openpi.training.data_loader as _data
+import openpi.training.streaming_dataset as _streaming_dataset
 
 
 def init_logging():
@@ -629,4 +630,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    _streaming_dataset.run_main(main)

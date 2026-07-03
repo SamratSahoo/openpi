@@ -1,7 +1,7 @@
 """See _CONFIGS for the list of available configs."""
 
 import abc
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import dataclasses
 import difflib
 import logging
@@ -63,8 +63,10 @@ class AssetsConfig:
 
 @dataclasses.dataclass(frozen=True)
 class DataConfig:
-    # LeRobot repo id. If None, fake data will be created.
-    repo_id: str | None = None
+    # LeRobot repo id. If None, fake data will be created. May be a single repo id or a list of
+    # repo ids. A list is treated as a single concatenated dataset: samples are drawn with
+    # probability proportional to each repo's size ("sample as one dataset"), not equally per repo.
+    repo_id: str | Sequence[str] | None = None
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
@@ -96,6 +98,23 @@ class DataConfig:
     action_space: droid_rlds_dataset.DroidActionSpace | None = None
     # List of datasets to sample from: name, version, weight, and optionally filter_dict_path
     datasets: Sequence[droid_rlds_dataset.RLDSDataset] = ()
+
+    # If true, stream the LeRobot dataset(s) directly from the HuggingFace Hub during training
+    # instead of downloading them to local disk. This avoids needing storage for the datasets and
+    # is the recommended mode for multi-repo mixtures. Only supported for LeRobot datasets that
+    # store camera frames inline in the parquet files (feature dtype "image"), which is the common
+    # case for converted DROID/LeRobot datasets. Hub rate limits (HTTP 429) are handled by waiting
+    # and retrying rather than crashing.
+    streaming: bool = False
+    # Size of the reservoir shuffle buffer used when streaming. Larger gives better shuffling but
+    # uses more host memory (each buffered sample holds its decoded camera frames).
+    streaming_shuffle_buffer_size: int = 1000
+
+    # Maps a streamed repo_id to a JSON file of non-idle keep-ranges (episode_index -> [[start, end]])
+    # produced by examples/droid/compute_droid_nonidle_ranges_streaming.py. ONLY repos listed here are
+    # filtered (idle frames dropped); every other repo in the mixture is sampled in full. Used to
+    # filter idle frames out of DROID (lerobot/droid_1.0.1) during training.
+    nonidle_filter_paths: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 
 class GroupFactory(Protocol):
@@ -163,14 +182,44 @@ class ModelTransformFactory(GroupFactory):
                 )
 
 
+def repo_id_as_list(repo_id: str | Sequence[str] | None) -> list[str] | None:
+    """Normalize a repo id (single or list) into a list, or None."""
+    if repo_id is None or repo_id is tyro.MISSING:
+        return None
+    if isinstance(repo_id, str):
+        return [repo_id]
+    return list(repo_id)
+
+
+def combined_asset_id(repo_id: str | Sequence[str] | None) -> str | None:
+    """Derive a single, filesystem-safe asset id from a (possibly multi-repo) repo id.
+
+    A single repo keeps its own id (so existing norm-stat assets keep working); a mixture is
+    joined into one deterministic id so its norm stats live in a single assets directory.
+    """
+    repos = repo_id_as_list(repo_id)
+    if not repos:
+        return None
+    if len(repos) == 1:
+        return repos[0]
+    return "+".join(r.replace("/", "_") for r in repos)
+
+
 @dataclasses.dataclass(frozen=True)
 class DataConfigFactory(abc.ABC):
-    # The LeRobot repo id.
-    repo_id: str = tyro.MISSING
+    # The LeRobot repo id. May be a single repo id or a list of repo ids (mixture).
+    repo_id: str | Sequence[str] = tyro.MISSING
     # Determines how the assets will be loaded.
     assets: AssetsConfig = dataclasses.field(default_factory=AssetsConfig)
     # Base config that will be updated by the factory.
     base_config: tyro.conf.Suppress[DataConfig | None] = None
+    # If true, stream the dataset(s) from the Hub instead of downloading to disk. See DataConfig.
+    streaming: bool = False
+    # Size of the reservoir shuffle buffer used when streaming. See DataConfig.
+    streaming_shuffle_buffer_size: int = 1000
+    # Maps a streamed repo_id to a non-idle keep-ranges JSON. Only listed repos are filtered. See
+    # DataConfig.nonidle_filter_paths.
+    nonidle_filter_paths: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
     @abc.abstractmethod
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -178,13 +227,16 @@ class DataConfigFactory(abc.ABC):
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
-        asset_id = self.assets.asset_id or repo_id
+        asset_id = self.assets.asset_id or combined_asset_id(repo_id)
         return dataclasses.replace(
             self.base_config or DataConfig(),
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
             use_quantile_norm=model_config.model_type != ModelType.PI0,
+            streaming=self.streaming,
+            streaming_shuffle_buffer_size=self.streaming_shuffle_buffer_size,
+            nonidle_filter_paths=self.nonidle_filter_paths,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
@@ -1047,6 +1099,66 @@ _CONFIGS = [
         num_train_steps=20_000,
         batch_size=32,
         save_interval=10000,
+    ),
+    # Base - streamed mixture of FULL DROID (lerobot/droid_1.0.1, LeRobot v3.0 *video*, idle-filtered)
+    # + Toys 100 (Sim, v2.1 inline-image). The streaming loader decodes DROID's MP4 videos on the fly
+    # (nothing downloaded), applies the pre-computed non-idle filter to DROID only, and reduces both
+    # datasets to joint-velocity + gripper actions. Both formats mix in one loader. NOTE: proportional
+    # ("as one dataset") mixing means DROID (27.6M frames) dominates Toys (0.14M); adjust the repos to
+    # taste. Compute the filter (examples/droid/compute_droid_nonidle_ranges_streaming.py) and norm
+    # stats (scripts/compute_norm_stats.py --config-name=... --max-frames=...) first. Swap toys100_sim
+    # for a v3.0-converted copy (examples/droid/convert_lerobot_v21_to_v3_droid.py) for less bandwidth.
+    TrainConfig(
+        name="pi05base-droid+toys100sim-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys100_sim"],
+            streaming=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=50000,
+    ),
+    # Same streamed base-model DROID + Toys mixture as above, for the smaller (Toys 20) and larger
+    # (Toys 300) sim sets. Full DROID (lerobot/droid_1.0.1) streams with the pre-computed non-idle
+    # filter applied to it only; the toys set streams in full. Compute the filter
+    # (examples/droid/compute_droid_nonidle_ranges_streaming.py) and norm stats first.
+    TrainConfig(
+        name="pi05base-droid+toys20sim-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys20_sim"],
+            streaming=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=50000,
+    ),
+    TrainConfig(
+        name="pi05base-droid+toys300sim-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_sim"],
+            streaming=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=100_000,
+        batch_size=32,
+        save_interval=50000,
     ),
     # Pi 0.5 DROID - Full Finetune on DROID-100 + Toys 100 (Sim) - DROID (Original) Norm Stats
     TrainConfig(

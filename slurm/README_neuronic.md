@@ -1,35 +1,40 @@
-# Neuronic slurm scripts (openpi full fine-tune of π₀.₅)
+# openpi slurm scripts (Neuronic, L40)
 
-These `*_neuronic.slurm` scripts are the **Neuronic-cluster equivalents** of the Della
-(`run_*.slurm`) scripts, set up to **full fine-tune π₀.₅** on the combined
-**DROID-100 + toys-no-collision** dataset (`pi05droid-full-d100+toys`).
+Two generic, **config-parameterized** jobs — pass any openpi `TrainConfig` name as the first argument:
 
-## What changed vs the Della scripts
-- **Caches on the project FS.** Home (`/u/<user>`) has only ~16 GB, so all caches point at the
-  1 TB `/n/fs/tamp-vla/.cache/{huggingface,openpi,uv}` (also exported from `~/.bashrc`).
-- **GPUs are L40, not A100.** `--gres=gpu:l40:N`, no `--constraint=a100`. `--account=seas`,
-  `--partition=all`.
-- **No `module load proxy/default`** — Neuronic login/compute nodes have direct internet.
-- **Full FT is sharded.** An L40 is ~46 GB but full FT needs >70 GB, so the train job takes the
-  whole 8×L40 node and shards the model+optimizer with **FSDP across all 8 GPUs**
-  (`--fsdp-devices 8`). Global batch stays 32 (4/device). If only 4 GPUs are free, use
-  `--gres=gpu:l40:4 --fsdp-devices 4` (tighter but usually fits); on OOM also add `--batch-size 16`.
-
-## Run order
 ```bash
 cd /n/fs/tamp-vla/tamp-vla/openpi
-# 1. DROID-100 raw RLDS -> LeRobot (downloads + converts -> SamratSahoo/d100)
-sbatch slurm/run_convert_droid_rlds_neuronic.slurm
-# 2. merge with toys-no-collision -> SamratSahoo/d100_toys20
-sbatch slurm/run_merge_datasets_v3_neuronic.slurm
-# 3. norm stats for the extended config
-sbatch slurm/run_compute_norm_stats_v3_neuronic.slurm
-# 4. full fine-tune (8×L40, FSDP=8)
-sbatch slurm/run_train_v3_neuronic.slurm
-# (optional) quick multi-GPU sanity check of the train loop
-sbatch slurm/run_train_test_neuronic.slurm
-```
-Chain them so each waits for the previous: `sbatch --dependency=afterok:<JOBID> ...`.
 
-Logs land in `slurm/logs/`. W&B logs online once you run `wandb login` on the login node;
-otherwise uncomment `export WANDB_MODE=offline` in `run_train_v3_neuronic.slurm`.
+# 1. Normalization stats (1x L40). Writes assets/<config>/<asset_id>/norm_stats.*
+sbatch slurm/compute_norm_stats.slurm <config_name>
+#    For big streaming configs, subsample with --max-frames, e.g.:
+#    sbatch slurm/compute_norm_stats.slurm pi05base-droid+toys100sim-stream --max-frames 200000
+
+# 2. Full fine-tune (whole 8x L40 node, FSDP=8). exp_name defaults to <config_name>.
+sbatch slurm/run_training.slurm <config_name> [exp_name] [extra train.py args]
+#    e.g. sbatch slurm/run_training.slurm pi05base-full-d100+toys100sim-stream
+#         sbatch slurm/run_training.slurm pi05base-toys20sim my_run --batch-size 16
+```
+
+Run norm stats **before** training for the same config. To make training wait for it:
+
+```bash
+NS=$(sbatch --parsable slurm/compute_norm_stats.slurm <config>)
+sbatch --dependency=afterok:$NS slurm/run_training.slurm <config>
+```
+
+## Neuronic settings (baked into both scripts)
+- **L40 GPUs**: `--gres=gpu:l40:1` (norm stats) / `gpu:l40:8` (training); `--account=seas`, `--partition=all`.
+- **FSDP=8 for training**: full FT of π₀.₅ needs >70 GB, but an L40 is only ~46 GB — so the whole 8×L40
+  node is taken and the model + AdamW state are sharded across all 8 GPUs (~9 GB/GPU) via
+  `--fsdp-devices 8`. Global batch stays 32 (4/device). If only 4 GPUs are free, edit `--gres` to
+  `gpu:l40:4` and pass `--fsdp-devices 4` (on OOM also `--batch-size 16`).
+- **Caches on the 1 TB project FS** (`/n/fs/tamp-vla/.cache/{uv,huggingface,openpi}`) — home is ~16 GB.
+- `--exclude=neu306` (a node that reproducibly faults fsdp=8; drop once fixed).
+- Logs land in `slurm/logs/`. W&B logs online once you've run `wandb login` on the login node
+  (or uncomment `export WANDB_MODE=offline` in `run_training.slurm`).
+
+## Other utilities (kept, not config-parameterized)
+- `run_convert_droid_rlds_neuronic.slurm` — DROID RLDS → LeRobot (builds `SamratSahoo/d100`).
+- `run_merge_datasets_v3_neuronic.slurm` — merge datasets.
+- `upload_ckpt.slurm` / `upload_ckpt.py` / `upload_checkpoints_to_drive.sh` — checkpoint upload helpers.

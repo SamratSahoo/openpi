@@ -14,6 +14,7 @@ import torch
 import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+import openpi.training.streaming_dataset as _streaming_dataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -62,7 +63,7 @@ class TransformedDataset(Dataset[T_co]):
         return len(self._dataset)
 
 
-class IterableTransformedDataset(IterableDataset[T_co]):
+class IterableTransformedDataset(IterableDataset[T_co], torch.utils.data.IterableDataset):
     def __init__(
         self,
         dataset: IterableDataset,
@@ -127,19 +128,11 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
-def create_torch_dataset(
-    data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
-) -> Dataset:
-    """Create a dataset for training."""
-    repo_id = data_config.repo_id
-    if repo_id is None:
-        raise ValueError("Repo ID is not set. Cannot create dataset.")
-    if repo_id == "fake":
-        return FakeDataset(model_config, num_samples=1024)
-
+def _create_single_lerobot_dataset(repo_id: str, data_config: _config.DataConfig, action_horizon: int) -> Dataset:
+    """Create a map-style dataset for a single LeRobot repo."""
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(
-        data_config.repo_id,
+        repo_id,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
@@ -149,6 +142,46 @@ def create_torch_dataset(
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
 
     return dataset
+
+
+def create_torch_dataset(
+    data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
+) -> Dataset:
+    """Create a dataset for training.
+
+    If ``data_config.repo_id`` is a list of repos, they are concatenated and sampled as a single
+    dataset (proportional to size). This path downloads the datasets locally; use streaming
+    (``data_config.streaming=True``) to avoid local storage.
+    """
+    repo_ids = _config.repo_id_as_list(data_config.repo_id)
+    if not repo_ids:
+        raise ValueError("Repo ID is not set. Cannot create dataset.")
+    if repo_ids == ["fake"]:
+        return FakeDataset(model_config, num_samples=1024)
+
+    datasets = [_create_single_lerobot_dataset(repo_id, data_config, action_horizon) for repo_id in repo_ids]
+    if len(datasets) == 1:
+        return datasets[0]
+    return torch.utils.data.ConcatDataset(datasets)
+
+
+def create_streaming_dataset(
+    data_config: _config.DataConfig, action_horizon: int, *, shuffle: bool, seed: int
+) -> IterableDataset:
+    """Create an iterable dataset that streams the LeRobot repo(s) from the Hub (no local storage)."""
+    repo_ids = _config.repo_id_as_list(data_config.repo_id)
+    if not repo_ids:
+        raise ValueError("Repo ID is not set. Cannot create streaming dataset.")
+    return _streaming_dataset.StreamingLeRobotDataset(
+        repo_ids,
+        action_horizon,
+        action_sequence_keys=data_config.action_sequence_keys,
+        prompt_from_task=data_config.prompt_from_task,
+        shuffle=shuffle,
+        shuffle_buffer_size=data_config.streaming_shuffle_buffer_size,
+        seed=seed,
+        filter_paths=data_config.nonidle_filter_paths,
+    )
 
 
 def create_rlds_dataset(
@@ -253,6 +286,19 @@ def create_data_loader(
             skip_norm_stats=skip_norm_stats,
             framework=framework,
         )
+    if data_config.streaming:
+        return create_streaming_data_loader(
+            data_config,
+            action_horizon=config.model.action_horizon,
+            batch_size=config.batch_size,
+            sharding=sharding,
+            shuffle=shuffle,
+            num_batches=num_batches,
+            num_workers=config.num_workers,
+            seed=config.seed,
+            skip_norm_stats=skip_norm_stats,
+            framework=framework,
+        )
     return create_torch_data_loader(
         data_config,
         model_config=config.model,
@@ -337,6 +383,60 @@ def create_torch_data_loader(
     return DataLoaderImpl(data_config, data_loader)
 
 
+def create_streaming_data_loader(
+    data_config: _config.DataConfig,
+    action_horizon: int,
+    batch_size: int,
+    *,
+    sharding: jax.sharding.Sharding | None = None,
+    skip_norm_stats: bool = False,
+    shuffle: bool = False,
+    num_batches: int | None = None,
+    num_workers: int = 0,
+    seed: int = 0,
+    framework: str = "jax",
+) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
+    """Create a data loader that streams the LeRobot repo(s) from the Hub during training.
+
+    No local storage of the datasets is required. Multiple repos are mixed and sampled as if they
+    were a single concatenated dataset (proportional to size). Hub rate limits are handled by
+    waiting and retrying rather than crashing.
+
+    Args:
+        data_config: The data configuration (``repo_id`` may be a single repo or a list).
+        action_horizon: The action horizon (number of future action frames per sample).
+        batch_size: The global batch size.
+        sharding: The JAX sharding to use for the data loader.
+        skip_norm_stats: Whether to skip data normalization.
+        shuffle: Whether to shuffle (via the streaming shuffle buffer).
+        num_batches: If provided, the number of batches to return; otherwise iterate indefinitely.
+        num_workers: Number of dataloader worker processes. Each worker streams a disjoint shard.
+        seed: Seed for shuffling / mixing.
+    """
+    dataset = create_streaming_dataset(data_config, action_horizon, shuffle=shuffle, seed=seed)
+    dataset = transform_iterable_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats, is_batched=False)
+
+    if framework == "pytorch":
+        local_batch_size = (
+            batch_size // torch.distributed.get_world_size() if torch.distributed.is_initialized() else batch_size
+        )
+    else:
+        local_batch_size = batch_size // jax.process_count()
+
+    logging.info(f"local_batch_size: {local_batch_size}")
+    data_loader = TorchDataLoader(
+        dataset,
+        local_batch_size=local_batch_size,
+        sharding=None if framework == "pytorch" else sharding,
+        shuffle=False,  # Streaming datasets shuffle internally via their shuffle buffer.
+        num_batches=num_batches,
+        num_workers=num_workers,
+        seed=seed,
+        framework=framework,
+    )
+    return DataLoaderImpl(data_config, data_loader)
+
+
 def create_rlds_data_loader(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -412,7 +512,13 @@ class TorchDataLoader:
         if jax.process_count() > 1:
             raise NotImplementedError("Data loading with multiple processes is not supported.")
 
-        if len(dataset) < local_batch_size:
+        # Iterable datasets (e.g. Hub streaming) have no random access: the DataLoader can't
+        # shuffle or sample them, and their length is only a (possibly infinite) estimate.
+        is_iterable = isinstance(dataset, torch.utils.data.IterableDataset)
+        if is_iterable:
+            shuffle = False
+            sampler = None
+        elif len(dataset) < local_batch_size:
             raise ValueError(f"Local batch size ({local_batch_size}) is larger than the dataset size ({len(dataset)}).")
 
         # Store sharding - None for PyTorch, JAX sharding for JAX

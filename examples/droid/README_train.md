@@ -62,6 +62,61 @@ By default, our openpi training recipe implements the same idle filter used to t
 
 **Note**: our list of filtering indices is only valid for the `droid/1.0.1` dataset mentioned in the download section above, and will not provide valid filtering for any other version of the DROID dataset, so make sure you download the dataset above! If you have a custom DROID version, you can rerun the [compute_droid_nonidle_ranges.py](examples/droid/compute_droid_nonidle_ranges.py) script to generate a new list of sampling indices.
 
+### Idle filtering when *streaming* DROID (LeRobot format)
+
+The script above reads a local TFDS/RLDS copy of DROID. When instead **streaming** the LeRobot-format
+`lerobot/droid_1.0.1` from the Hub as one repo in a `streaming=True` mixture (see the streaming data
+loader in [src/openpi/training/streaming_dataset.py](src/openpi/training/streaming_dataset.py)), use
+[compute_droid_nonidle_ranges_streaming.py](examples/droid/compute_droid_nonidle_ranges_streaming.py).
+It streams only the low-dimensional columns it needs (`action.joint_velocity`), so it never downloads
+the (large) camera videos, and it reads the canonical file list from `meta/episodes` (v3.0 ships extra
+non-canonical data files). It applies the exact same idle-filtering logic and writes a JSON keyed by
+`episode_index`:
+
+```bash
+uv run python examples/droid/compute_droid_nonidle_ranges_streaming.py \
+    --repo-id lerobot/droid_1.0.1 \
+    --out filters/lerobot_droid_1.0.1.json
+```
+
+To apply it during training, point the data config's `nonidle_filter_paths` at that JSON for the DROID
+repo (only repos listed here are filtered; every other repo in the mixture is sampled in full, and the
+mixing weight for the filtered repo automatically shrinks to its kept-frame count):
+
+```python
+data=LeRobotDROIDDataConfig(
+    repo_id=["lerobot/droid_1.0.1", "<your/other_repo>"],
+    streaming=True,
+    nonidle_filter_paths={"lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json"},
+    base_config=DataConfig(prompt_from_task=True),
+),
+```
+
+### Streaming full DROID (v3.0 video) + mixing with v2.1 datasets
+
+The streaming loader supports **both** LeRobot v2.1 (inline-image parquet) and v3.0 (separate MP4 video)
+datasets, and can mix them in one training run. This lets you stream **full** `lerobot/droid_1.0.1`
+(v3.0, 400 GB of video) without downloading it: for each episode the loader reads the low-dim parquet
+and decodes the needed camera frames directly from the MP4s over `hf://` (PyAV seeks by timestamp, so
+only a few MB per episode are fetched). DROID's v3.0 schema is normalized to the same frame keys as the
+v2.1 datasets, and **both are reduced to joint-velocity + gripper actions**
+(`actions = concat(action.joint_velocity[7], action.gripper_position[1])`) so one transform stack and
+one action space serve the whole mixture. See the ready-made config `pi05base-droid+toys100sim-stream`.
+
+Because the loader already mixes v2.1 and v3.0, you do **not** have to convert your v2.1 datasets. But
+inline-image datasets are large to stream (e.g. `toys300_sim` is ~98 GB of PNG); re-encoding them as
+v3.0 video shrinks them ~30x and speeds up streaming. To convert (streams the source, no full download;
+needs your HF write token to `--push`):
+
+```bash
+uv run python examples/droid/convert_lerobot_v21_to_v3_droid.py \
+    --src-repo SamratSahoo/toys100_sim --dst-repo SamratSahoo/toys100_sim_v3 \
+    --out-dir /tmp/toys100_v3 --push
+```
+
+Then swap `toys100_sim` for `toys100_sim_v3` in the config's `repo_id`. (Note: video is lossy; measured
+image error is small — ~2/255 mean-abs-error at CRF 20.)
+
 ## RoboArena
 
 Consider submitting your DROID policies to the [RoboArena benchmark](https://robo-arena.github.io/), which allows you to evaluate your policies on diverse tasks & scenes, **in the real world**! :)
