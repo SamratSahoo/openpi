@@ -1174,6 +1174,11 @@ _CONFIGS = [
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
             },
             base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                # Reuse the original DROID norm stats instead of computing new ones.
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
@@ -1190,6 +1195,11 @@ _CONFIGS = [
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
             },
             base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                # Reuse the original DROID norm stats instead of computing new ones.
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
@@ -1206,6 +1216,11 @@ _CONFIGS = [
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
             },
             base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                # Reuse the original DROID norm stats instead of computing new ones.
+                assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
