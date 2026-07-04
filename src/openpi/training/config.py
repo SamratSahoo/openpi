@@ -1165,7 +1165,7 @@ _CONFIGS = [
     # pre-computed non-idle filter applied to it only; the toys set streams in full. Compute the filter
     # (examples/droid/compute_droid_nonidle_ranges_streaming.py) and norm stats first.
     TrainConfig(
-        name="pi05base-droid+toys300vaesim-stream",
+        name="pi05droid-droid+toys300vaesim-stream",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
         data=LeRobotDROIDDataConfig(
             repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae_sim"],
@@ -1175,13 +1175,13 @@ _CONFIGS = [
             },
             base_config=DataConfig(prompt_from_task=True),
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=100_000,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
         batch_size=32,
-        save_interval=50000,
+        save_interval=20000,
     ),
     TrainConfig(
-        name="pi05base-droid+toys300rndsim-stream",
+        name="pi05droid-droid+toys300rndsim-stream",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
         data=LeRobotDROIDDataConfig(
             repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_rnd_sim"],
@@ -1191,13 +1191,13 @@ _CONFIGS = [
             },
             base_config=DataConfig(prompt_from_task=True),
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=100_000,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
         batch_size=32,
-        save_interval=50000,
+        save_interval=20000,
     ),
     TrainConfig(
-        name="pi05base-droid+toys300vaerndsim-stream",
+        name="pi05droid-droid+toys300vaerndsim-stream",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16),
         data=LeRobotDROIDDataConfig(
             repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae_rnd_sim"],
@@ -1207,10 +1207,10 @@ _CONFIGS = [
             },
             base_config=DataConfig(prompt_from_task=True),
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=100_000,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
         batch_size=32,
-        save_interval=50000,
+        save_interval=20000,
     ),
     # Pi 0.5 DROID - Full Finetune on DROID-100 + Toys 100 (Sim) - DROID (Original) Norm Stats
     TrainConfig(
