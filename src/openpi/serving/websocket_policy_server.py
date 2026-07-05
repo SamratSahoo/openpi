@@ -58,7 +58,18 @@ class WebsocketPolicyServer:
                 obs = msgpack_numpy.unpackb(await websocket.recv())
 
                 infer_time = time.monotonic()
-                action = self._policy.infer(obs)
+                # Batched path: a client can send {"__batched_observations__": [obs0, obs1, ...]} to run all
+                # N observations in ONE forward pass (see Policy.infer_batch). Falls back to a serial loop if
+                # the policy has no infer_batch. The single-obs path (below) is unchanged for other clients.
+                if isinstance(obs, dict) and "__batched_observations__" in obs:
+                    batch = obs["__batched_observations__"]
+                    if hasattr(self._policy, "infer_batch"):
+                        results = self._policy.infer_batch(batch)
+                    else:
+                        results = [self._policy.infer(o) for o in batch]
+                    action = {"actions_batch": results}
+                else:
+                    action = self._policy.infer(obs)
                 infer_time = time.monotonic() - infer_time
 
                 action["server_timing"] = {
