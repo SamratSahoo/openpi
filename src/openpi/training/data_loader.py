@@ -182,6 +182,7 @@ def create_streaming_dataset(
         seed=seed,
         filter_paths=data_config.nonidle_filter_paths,
         joint_position_actions=data_config.joint_position_actions,
+        sampling_weights=data_config.sampling_weights,
     )
 
 

@@ -121,6 +121,13 @@ class DataConfig:
     # Pair with the DeltaActions/AbsoluteActions transform in LeRobotDROIDDataConfig.create.
     joint_position_actions: bool = False
 
+    # Explicit per-repo mixing weights (repo_id -> relative weight) for a streamed multi-repo mixture.
+    # Empty (the default) => sample proportional to each repo's frame count ("sample as one dataset").
+    # When set it must have a positive entry for EVERY repo in the mixture; the weights are relative
+    # (normalized at sampling time), so e.g. {a: 0.5, b: 0.5} draws each repo equally regardless of size
+    # (oversampling the smaller one). Only used by the streaming loader.
+    sampling_weights: Mapping[str, float] = dataclasses.field(default_factory=dict)
+
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -228,6 +235,9 @@ class DataConfigFactory(abc.ABC):
     # If true, stream action.joint_position (absolute joint targets) as the action. See
     # DataConfig.joint_position_actions. LeRobotDROIDDataConfig.create pairs this with a delta transform.
     joint_position_actions: bool = False
+    # Explicit per-repo mixing weights for a streamed multi-repo mixture. Empty => size-proportional.
+    # See DataConfig.sampling_weights.
+    sampling_weights: Mapping[str, float] = dataclasses.field(default_factory=dict)
 
     @abc.abstractmethod
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -246,6 +256,7 @@ class DataConfigFactory(abc.ABC):
             streaming_shuffle_buffer_size=self.streaming_shuffle_buffer_size,
             nonidle_filter_paths=self.nonidle_filter_paths,
             joint_position_actions=self.joint_position_actions,
+            sampling_weights=self.sampling_weights,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
@@ -1264,6 +1275,12 @@ _CONFIGS = [
             nonidle_filter_paths={
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
             },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys20_sim": 0.5,
+            },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
                 # Reuse the POLARIS jointpos DROID norm stats (delta-joint-position space).
@@ -1288,6 +1305,12 @@ _CONFIGS = [
             nonidle_filter_paths={
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
             },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys100_sim": 0.5,
+            },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
                 assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
@@ -1310,6 +1333,12 @@ _CONFIGS = [
             joint_position_actions=True,
             nonidle_filter_paths={
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys300_sim": 0.5,
             },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
@@ -1334,6 +1363,12 @@ _CONFIGS = [
             nonidle_filter_paths={
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
             },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys300_vae_sim": 0.5,
+            },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
                 assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
@@ -1357,6 +1392,12 @@ _CONFIGS = [
             nonidle_filter_paths={
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
             },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys300_rnd_sim": 0.5,
+            },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
                 assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
@@ -1379,6 +1420,12 @@ _CONFIGS = [
             joint_position_actions=True,
             nonidle_filter_paths={
                 "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys300_vae_rnd_sim": 0.5,
             },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(

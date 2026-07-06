@@ -12,10 +12,12 @@ Key properties:
 * **No local storage.** Parquet row groups are streamed over HTTP via the generic
   ``datasets`` parquet builder pointed at ``hf://`` paths. Nothing is written to the
   ``datasets``/LeRobot cache.
-* **Dataset mixtures.** Multiple repos can be mixed. Samples are drawn *as if the repos were
-  a single concatenated dataset*: each source is picked with probability proportional to its
-  number of frames (proportional / "sample as one dataset" mixing), which matches uniform
-  sampling over a concatenation of the datasets in expectation.
+* **Dataset mixtures.** Multiple repos can be mixed. By default samples are drawn *as if the repos
+  were a single concatenated dataset*: each source is picked with probability proportional to its
+  number of frames (proportional / "sample as one dataset" mixing), which matches uniform sampling
+  over a concatenation of the datasets in expectation. Passing ``sampling_weights`` instead fixes
+  each repo's per-sample probability to an explicit, size-independent weight -- e.g. equal weights
+  make a small target repo contribute the same share as a huge base repo (i.e. oversampling it).
 * **Action-horizon chunking.** For each anchor frame we build the ``action_horizon`` window of
   future actions (clamped/padded at episode boundaries, exactly like LeRobot's
   ``delta_timestamps`` logic), producing an ``actions`` array of shape ``[action_horizon, action_dim]``
@@ -31,7 +33,11 @@ Key properties:
   workers as ``files[worker_id::num_workers]``. Because ``datasets`` does this itself, we must NOT
   also slice files per worker (that would double-shard and silently drop ~1-1/num_workers of the
   data); instead we pass every worker of a rank the same file order so the split is disjoint and
-  complete.
+  complete. The v3.0 (video) path shards the canonical data files ourselves across (rank, worker);
+  when a repo has fewer files than shards (e.g. a small single-file sim repo) those extra shards
+  would otherwise stream nothing from it, pinning the whole repo to one worker and making its samples
+  arrive in bursts. ``_v3_shard_plan`` avoids this by having the sharing shards split that file's
+  *episodes* between them, so every worker holds a proportional slice of every repo.
 """
 
 from __future__ import annotations
@@ -450,6 +456,71 @@ class _HubSource:
         return [f"hf://datasets/{self.repo_id}/{rel}" for rel in files]
 
 
+def _v3_shard_plan(num_files: int, shard_id: int, num_shards: int) -> tuple[list[int], int, int]:
+    """Plan how one v3.0 shard reads a repo's canonical data files: ``(file_indices, group, num_groups)``.
+
+    Two regimes, chosen so every shard gets a proportional slice of the repo (fixing the single-file
+    "burst" where a repo with fewer files than shards is pinned to shard 0):
+
+    * ``num_shards <= num_files``: each shard owns a *disjoint set of whole files*
+      (``files[shard_id::num_shards]``) and emits all of their episodes (``group 0 of 1``). No file is
+      read by more than one shard -- the efficient common case (e.g. 49-file DROID over 8 shards).
+    * ``num_shards >  num_files``: files are shared. This shard reads the single file
+      ``files[shard_id % num_files]`` and, together with the other shards reading that same file, splits
+      its episodes ``num_groups`` ways. So a 1-file repo over 8 shards is spread across all 8 workers
+      instead of pinned to one.
+
+    Episode selection within a shared file is applied in ``_stream_frames_v3`` via ``_episode_owner``,
+    which maps this shard's ``(group, num_groups)`` onto the file's actual episode count. When a file has
+    at least ``num_groups`` episodes this is a disjoint, complete partition; when it has FEWER (more
+    shards share it than it has episodes) the excess shards duplicate an episode rather than owning none
+    -- so no shard is ever idle (which would hang its dataloader worker) while global coverage is kept.
+    """
+    if num_files <= 0:
+        return [], 0, 1
+    if num_shards <= num_files:
+        return list(range(shard_id, num_files, num_shards)), 0, 1
+    file_idx = shard_id % num_files
+    num_groups = len(range(file_idx, num_shards, num_files))  # shards sharing this file
+    group = shard_id // num_files  # this shard's index among them, in [0, num_groups)
+    return [file_idx], group, num_groups
+
+
+def _episode_owner(num_episodes: int, episode_group: int, num_episode_groups: int) -> tuple[int, int]:
+    """Map a shard's ``(episode_group, num_episode_groups)`` onto a file's episodes: ``(divisor, remainder)``.
+
+    The caller owns local episode ``j`` iff ``j % divisor == remainder``. ``divisor`` is capped at the
+    file's episode count so that EVERY group in ``[0, num_episode_groups)`` maps to a real episode:
+
+    * ``num_episodes >= num_episode_groups``: ``divisor = num_episode_groups`` -- a disjoint, complete
+      partition; each shard owns ``floor``/``ceil(num_episodes / num_episode_groups)`` episodes (>= 1).
+    * ``num_episodes <  num_episode_groups``: ``divisor = num_episodes`` -- there are more sharing shards
+      than episodes, so shard ``g`` owns episode ``g % num_episodes`` (exactly one), and shards beyond the
+      episode count DUPLICATE earlier episodes instead of owning nothing. A shard owning zero episodes
+      would yield forever without producing a sample and hang its dataloader worker; capping the divisor
+      is what prevents that. Duplication is harmless here -- these repos are being oversampled anyway.
+
+    ``num_episode_groups == 1`` (the common whole-file shard) always yields ``(1, 0)`` -> owns every
+    episode. ``num_episodes == 0`` (an empty file) yields ``(1, 0)`` too, a no-op since there is nothing
+    to iterate.
+    """
+    divisor = min(num_episode_groups, num_episodes) if num_episodes > 0 else 1
+    return divisor, episode_group % divisor
+
+
+def _mixing_weight(source: _HubSource, sampling_weights: Mapping[str, float] | None) -> float:
+    """Relative mixing weight for one source: an explicit ``sampling_weights`` entry, else its frame count.
+
+    ``rng.choices`` normalizes these, so explicit weights are size-independent proportions while the
+    default (``sampleable_frames``) reproduces size-proportional "sample as one dataset" mixing. The
+    same weight is used on every worker; combined with ``_v3_shard_plan`` placing every repo on every
+    worker, the per-worker mix equals the intended global mix (no bursts).
+    """
+    if sampling_weights:
+        return float(sampling_weights[source.repo_id])
+    return float(source.sampleable_frames) or 1.0
+
+
 class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
     """Iterable dataset that streams (and mixes) LeRobot datasets from the Hub.
 
@@ -472,6 +543,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         seed: int = 0,
         filter_paths: Mapping[str, str] | None = None,
         joint_position_actions: bool = False,
+        sampling_weights: Mapping[str, float] | None = None,
     ):
         super().__init__()
         if isinstance(repo_ids, str):
@@ -486,6 +558,26 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.shuffle_buffer_size = max(1, int(shuffle_buffer_size))
         self.seed = int(seed)
         self.joint_position_actions = bool(joint_position_actions)
+
+        # Explicit per-repo mixing weights (repo_id -> relative weight). Empty/None => size-proportional
+        # mixing on frame counts (the default). When provided it must cover EXACTLY the repos in the
+        # mixture with positive weights -- mixing an explicit weight with a frame-count fallback (millions
+        # vs ~1) would silently wipe out the explicit repo's share, so we fail fast instead of guessing.
+        self.sampling_weights = dict(sampling_weights) if sampling_weights else None
+        if self.sampling_weights is not None:
+            repo_set = set(self.repo_ids)
+            missing = [r for r in self.repo_ids if r not in self.sampling_weights]
+            if missing:
+                raise ValueError(
+                    f"sampling_weights was provided but is missing entries for {missing}. Give a weight for "
+                    "every repo in the mixture, or leave it empty for size-proportional mixing."
+                )
+            extra = [k for k in self.sampling_weights if k not in repo_set]
+            if extra:
+                raise ValueError(f"sampling_weights has entries for repos not in the mixture: {extra}.")
+            non_positive = {k: v for k, v in self.sampling_weights.items() if not (float(v) > 0.0)}
+            if non_positive:
+                raise ValueError(f"sampling_weights values must be positive; got non-positive {non_positive}.")
         # Joint-position training additionally requests the action.joint_position column; velocity
         # configs keep the original column set so datasets without that column stream unchanged.
         self._v3_lowdim_columns = _V3_LOWDIM_COLUMNS + (
@@ -626,13 +718,29 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             frame[common_key] = decoded[frame_in_ep]
         return frame
 
-    def _stream_frames_v3(self, source: _HubSource, files: Sequence[str], base_seed: int) -> Iterator[dict]:
+    def _stream_frames_v3(
+        self,
+        source: _HubSource,
+        files: Sequence[str],
+        base_seed: int,
+        *,
+        episode_group: int = 0,
+        num_episode_groups: int = 1,
+    ) -> Iterator[dict]:
         """Yield raw frames for a v3.0 (video) source, forever, in episode-contiguous order.
 
         Reads each canonical data parquet's low-dim columns, splits it into episodes, decodes each
         episode's camera videos from the MP4s (streamed by timestamp), and yields per-frame dicts with
-        the common keys. Sharding is done by the caller (disjoint ``files`` per shard). Transient Hub
-        errors are waited out and the current file restarted.
+        the common keys. Sharding is done by the caller: whole disjoint ``files`` per shard in the common
+        case, or -- when several shards share one file (a repo with fewer files than shards) -- an episode
+        split. Within each file this shard owns the episodes selected by ``_episode_owner`` (which caps the
+        split at the file's episode count so this shard is never left owning zero episodes -- that would
+        make the generator loop forever without yielding and hang the dataloader worker). Non-owned
+        episodes are skipped WITHOUT decoding their videos (the expensive step), so the shared-file case
+        stays cheap. The per-file episode ordinal is recomputed each pass, so the split is identical across
+        the shards sharing a file and across retries. If a whole pass produces nothing (only possible for a
+        degenerate empty file), we sleep before retrying rather than busy-looping on the Hub.
+        ``num_episode_groups == 1`` (the default whole-file shard) emits every episode, unchanged.
         """
         from huggingface_hub import HfFileSystem
         import pyarrow.parquet as pq
@@ -644,6 +752,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         attempt = 0
         while True:
             try:
+                produced = False
                 for rel in files:
                     data_path = f"datasets/{source.repo_id}/{rel}"
 
@@ -661,10 +770,21 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                         )
                     attempt = 0
                     episode_col = np.asarray(low["episode_index"])
+                    if episode_col.size == 0:
+                        # Degenerate empty canonical file: contribute nothing (and, if every file is empty,
+                        # leave `produced` False so the pass hits the sleep backstop instead of a busy loop).
+                        continue
                     boundaries = np.nonzero(np.diff(episode_col))[0] + 1
                     seg_starts = np.concatenate([[0], boundaries])
                     seg_ends = np.concatenate([boundaries, [len(episode_col)]])
-                    for seg_start, seg_end in zip(seg_starts, seg_ends, strict=True):
+                    # Map this shard's (group, num_groups) onto THIS file's episode count so it always owns
+                    # >= 1 episode (see _episode_owner). Consistent across the shards sharing the file since
+                    # they read the same segments in the same order.
+                    divisor, remainder = _episode_owner(len(seg_starts), episode_group, num_episode_groups)
+                    for local_ordinal, (seg_start, seg_end) in enumerate(zip(seg_starts, seg_ends, strict=True)):
+                        if local_ordinal % divisor != remainder:
+                            continue  # not this shard's episode; skip before any (expensive) video decode.
+                        produced = True
                         episode = int(episode_col[seg_start])
                         seg_len = int(seg_end - seg_start)
                         images = {}
@@ -677,6 +797,9 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                             images[common_key] = retry_call(_decode, what=f"decoding {video_path}")
                         for i in range(seg_len):
                             yield self._make_v3_frame(source, low, seg_start + i, i, images)
+                if not produced:
+                    # Every file was empty (degenerate). Avoid a tight Hub re-read loop; mirrors the v2.1 path.
+                    time.sleep(_EMPTY_PASS_WAIT_S)
             except Exception as exc:
                 if not _is_retryable(exc):
                     raise
@@ -810,13 +933,17 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         for source_idx, source in enumerate(self.sources):
             if source.is_v30:
                 # v3.0 (video): we read parquet + decode video ourselves, so we shard the canonical
-                # data files directly across (rank, worker). Files are disjoint per shard, so a
-                # per-shard reshuffle seed is fine.
-                shard_files = source.files[shard_id::num_shards]
-                if not shard_files:
+                # data files directly across (rank, worker). When a repo has fewer files than shards,
+                # sharing shards split that file's episodes instead of leaving extra shards empty (which
+                # would pin a small single-file repo to one worker and make its samples arrive in bursts).
+                file_idxs, ep_group, ep_groups = _v3_shard_plan(len(source.files), shard_id, num_shards)
+                if not file_idxs:
                     continue
+                shard_files = [source.files[i] for i in file_idxs]
                 file_seed = self.seed + shard_id * 9973 + source_idx * 104729
-                frames = self._stream_frames_v3(source, shard_files, file_seed)
+                frames = self._stream_frames_v3(
+                    source, shard_files, file_seed, episode_group=ep_group, num_episode_groups=ep_groups
+                )
             else:
                 # v2.1 (inline image): shard by DDP rank; worker sharding is delegated to datasets, which
                 # gives this worker rank_files[worker_id::num_workers] (empty when worker_id >= len).
@@ -828,9 +955,11 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                 file_seed = self.seed + rank * 9973 + source_idx * 104729
                 frames = self._stream_frames(source, rank_files, file_seed)
             gens.append(self._chunk_frames(frames, source))
-            # Mix proportional to the number of *sampleable* frames: for a filtered source this is its
-            # kept-frame count, so the non-idle filter shrinks its share of the mixture accordingly.
-            weights.append(float(source.sampleable_frames) or 1.0)
+            # Explicit per-repo weight if configured, else mix proportional to the number of *sampleable*
+            # frames (for a filtered source this is its kept-frame count, so the non-idle filter shrinks
+            # its share of the mixture accordingly). Every worker uses the same weights and -- thanks to
+            # _v3_shard_plan placing every repo on every worker -- yields the same global mix, no bursts.
+            weights.append(_mixing_weight(source, self.sampling_weights))
 
         if not gens:
             # This worker was assigned no files from any source (num_workers exceeds every repo's
