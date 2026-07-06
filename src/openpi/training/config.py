@@ -116,6 +116,11 @@ class DataConfig:
     # filter idle frames out of DROID (lerobot/droid_1.0.1) during training.
     nonidle_filter_paths: Mapping[str, str] = dataclasses.field(default_factory=dict)
 
+    # If true, the streaming v3.0 loader builds `actions` from action.joint_position[7] + gripper[1]
+    # (absolute commanded joint targets) instead of the default action.joint_velocity[7] + gripper[1].
+    # Pair with the DeltaActions/AbsoluteActions transform in LeRobotDROIDDataConfig.create.
+    joint_position_actions: bool = False
+
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -220,6 +225,9 @@ class DataConfigFactory(abc.ABC):
     # Maps a streamed repo_id to a non-idle keep-ranges JSON. Only listed repos are filtered. See
     # DataConfig.nonidle_filter_paths.
     nonidle_filter_paths: Mapping[str, str] = dataclasses.field(default_factory=dict)
+    # If true, stream action.joint_position (absolute joint targets) as the action. See
+    # DataConfig.joint_position_actions. LeRobotDROIDDataConfig.create pairs this with a delta transform.
+    joint_position_actions: bool = False
 
     @abc.abstractmethod
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -237,6 +245,7 @@ class DataConfigFactory(abc.ABC):
             streaming=self.streaming,
             streaming_shuffle_buffer_size=self.streaming_shuffle_buffer_size,
             nonidle_filter_paths=self.nonidle_filter_paths,
+            joint_position_actions=self.joint_position_actions,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
@@ -499,11 +508,20 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
                 )
             ]
         )
-        # We assume joint *velocity* actions, so we should *not* apply an additional delta transform.
+        # By default we assume joint *velocity* actions, so we do *not* apply a delta transform.
         data_transforms = _transforms.Group(
             inputs=[droid_policy.DroidInputs(model_type=model_config.model_type)],
             outputs=[droid_policy.DroidOutputs()],
         )
+        # Joint-position actions are ABSOLUTE joint targets -> convert to delta (relative to the current
+        # joint state) for training; the gripper (last dim) stays absolute. Mirrors the RLDS
+        # JOINT_POSITION path (RLDSDroidDataConfig.create). Norm stats must be in this same delta space.
+        if self.joint_position_actions:
+            delta_action_mask = _transforms.make_bool_mask(7, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
         model_transforms = ModelTransformFactory()(model_config)
 
         return dataclasses.replace(
@@ -1223,6 +1241,154 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    # =============================================================================================
+    # Pi 0.5 POLARIS joint-position finetunes: stream DROID (lerobot/droid_1.0.1, non-idle filtered)
+    # + a Toys sim set, but TRAIN ON action.joint_position (absolute joint targets, converted to deltas
+    # via DeltaActions(make_bool_mask(7, -1))). Finetune off the POLARIS pi05 joint-position DROID
+    # checkpoint and REUSE its droid norm stats (delta-joint-position space) -- do NOT recompute.
+    # joint_position_actions=True flips the streaming loader from action.joint_velocity to
+    # action.joint_position AND enables the delta/absolute transform in LeRobotDROIDDataConfig.create.
+    # action_horizon=15 matches the polaris jointpos action expert (misc/polaris_config.py).
+    # =============================================================================================
+    TrainConfig(
+        name="pi05polaris-droid+toys20sim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys20_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                # Reuse the POLARIS jointpos DROID norm stats (delta-joint-position space).
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    TrainConfig(
+        name="pi05polaris-droid+toys100sim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys100_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    TrainConfig(
+        name="pi05polaris-droid+toys300sim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    TrainConfig(
+        name="pi05polaris-droid+toys300vaesim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    TrainConfig(
+        name="pi05polaris-droid+toys300rndsim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_rnd_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    TrainConfig(
+        name="pi05polaris-droid+toys300vaerndsim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae_rnd_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
         num_train_steps=20_000,
         batch_size=32,
         save_interval=20000,

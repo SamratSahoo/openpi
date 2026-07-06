@@ -237,6 +237,9 @@ _V3_JOINT_POSITION_KEY = "observation.state.joint_position"
 _V3_GRIPPER_POSITION_KEY = "observation.state.gripper_position"
 _V3_ACTION_JOINT_VELOCITY_KEY = "action.joint_velocity"
 _V3_ACTION_GRIPPER_KEY = "action.gripper_position"
+# Absolute commanded/target joints (DROID 1.0.1 action.joint_position). Only requested + used when
+# joint_position_actions=True; datasets lacking this column are unaffected on the default velocity path.
+_V3_ACTION_JOINT_POSITION_KEY = "action.joint_position"
 # Low-dim columns read from the v3.0 data parquet (images come from the videos, decoded separately).
 _V3_LOWDIM_COLUMNS = (
     "episode_index",
@@ -468,6 +471,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         shuffle_buffer_size: int = 1000,
         seed: int = 0,
         filter_paths: Mapping[str, str] | None = None,
+        joint_position_actions: bool = False,
     ):
         super().__init__()
         if isinstance(repo_ids, str):
@@ -481,6 +485,12 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.shuffle = bool(shuffle)
         self.shuffle_buffer_size = max(1, int(shuffle_buffer_size))
         self.seed = int(seed)
+        self.joint_position_actions = bool(joint_position_actions)
+        # Joint-position training additionally requests the action.joint_position column; velocity
+        # configs keep the original column set so datasets without that column stream unchanged.
+        self._v3_lowdim_columns = _V3_LOWDIM_COLUMNS + (
+            (_V3_ACTION_JOINT_POSITION_KEY,) if self.joint_position_actions else ()
+        )
 
         # Capture the DDP rank/world size HERE, in the main process. __iter__ runs inside spawned
         # dataloader workers where the process group is NOT initialized, so querying torch.distributed
@@ -503,6 +513,20 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                 raise ValueError(
                     f"prompt_from_task=True but no task metadata (meta/tasks.jsonl) could be loaded for "
                     f"{missing}. Fix the dataset's tasks metadata or set prompt_from_task=False."
+                )
+
+        # Joint-position action training is only defined for v3.0 datasets, which expose a dedicated
+        # action.joint_position column that _make_v3_frame can select. A v2.1 source has a single
+        # (velocity) `actions` column the flag cannot switch, yet the paired DeltaActions transform is
+        # applied to the whole mixture -- so a v2.1 repo here would be silently double-transformed. Fail
+        # fast instead of corrupting that half of the mixture.
+        if self.joint_position_actions:
+            non_v3 = [source.repo_id for source in self.sources if not source.is_v30]
+            if non_v3:
+                raise ValueError(
+                    f"joint_position_actions=True requires v3.0 datasets with an "
+                    f"{_V3_ACTION_JOINT_POSITION_KEY!r} column, but these repos are v2.1: {non_v3}. "
+                    f"Convert them to v3.0 or unset joint_position_actions."
                 )
 
         # Load non-idle keep-ranges ONLY for the repos explicitly configured in ``filter_paths``.
@@ -584,14 +608,17 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         The training ``actions`` are ``concat(action.joint_velocity[7], action.gripper_position[1])`` --
         joint-velocity actions -- matching the v2.1 datasets so all downstream transforms are shared.
+        When ``joint_position_actions`` is set, the joint part comes from ``action.joint_position``
+        (absolute commanded targets) instead; the delta transform is added by the data config.
         """
+        action_key = _V3_ACTION_JOINT_POSITION_KEY if self.joint_position_actions else _V3_ACTION_JOINT_VELOCITY_KEY
         frame = {
             "episode_index": int(low["episode_index"][row]),
             "frame_index": int(low["frame_index"][row]),
             "joint_position": _as_1d_float(low[_V3_JOINT_POSITION_KEY][row]),
             "gripper_position": _as_1d_float(low[_V3_GRIPPER_POSITION_KEY][row]),
             "actions": np.concatenate(
-                [_as_1d_float(low[_V3_ACTION_JOINT_VELOCITY_KEY][row]), _as_1d_float(low[_V3_ACTION_GRIPPER_KEY][row])]
+                [_as_1d_float(low[action_key][row]), _as_1d_float(low[_V3_ACTION_GRIPPER_KEY][row])]
             ),
             "task_index": int(low["task_index"][row]),
         }
@@ -622,9 +649,16 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
                     def _read(data_path=data_path):
                         with fs.open(data_path, "rb") as fh:
-                            return pq.ParquetFile(fh).read(columns=list(_V3_LOWDIM_COLUMNS)).to_pydict()
+                            return pq.ParquetFile(fh).read(columns=list(self._v3_lowdim_columns)).to_pydict()
 
                     low = retry_call(_read, what=f"reading {rel}")
+                    # pyarrow silently drops absent requested columns (no read-time error), so a missing
+                    # action.joint_position would otherwise surface as an opaque KeyError in _make_v3_frame.
+                    if self.joint_position_actions and _V3_ACTION_JOINT_POSITION_KEY not in low:
+                        raise KeyError(
+                            f"{source.repo_id!r} lacks column {_V3_ACTION_JOINT_POSITION_KEY!r} required by "
+                            "joint_position_actions=True"
+                        )
                     attempt = 0
                     episode_col = np.asarray(low["episode_index"])
                     boundaries = np.nonzero(np.diff(episode_col))[0] + 1
