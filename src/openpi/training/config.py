@@ -1463,7 +1463,7 @@ _CONFIGS = [
         save_interval=20000,
     ),
     TrainConfig(
-        name="pi05polaris-droid+toys300vaerndsim-jointpos-stream",
+        name="pi05polaris-droid+toys300vae35krndsim-jointpos-stream",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
         data=LeRobotDROIDDataConfig(
             repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae_rnd_sim"],
