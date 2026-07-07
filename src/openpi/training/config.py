@@ -1405,6 +1405,35 @@ _CONFIGS = [
         save_interval=20000,
     ),
     TrainConfig(
+        name="pi05polaris-droid+toys300vae35ksim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae35k_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys300_vae35k_sim": 0.5,
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    TrainConfig(
         name="pi05polaris-droid+toys300rndsim-jointpos-stream",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
         data=LeRobotDROIDDataConfig(
@@ -1448,6 +1477,35 @@ _CONFIGS = [
             sampling_weights={
                 "lerobot/droid_1.0.1": 0.5,
                 "SamratSahoo/toys300_vae_rnd_sim": 0.5,
+            },
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/assets",
+                asset_id="droid",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris/params"
+        ),
+        num_train_steps=20_000,
+        batch_size=32,
+        save_interval=20000,
+    ),
+    TrainConfig(
+        name="pi05polaris-droid+toys300vaerndsim-jointpos-stream",
+        model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
+        data=LeRobotDROIDDataConfig(
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae35k_rnd_sim"],
+            streaming=True,
+            joint_position_actions=True,
+            nonidle_filter_paths={
+                "lerobot/droid_1.0.1": "filters/lerobot_droid_1.0.1.json",
+            },
+            # Sample DROID and the toys sim set 50/50 per batch instead of by frame count (which would
+            # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
+            sampling_weights={
+                "lerobot/droid_1.0.1": 0.5,
+                "SamratSahoo/toys300_vae35k_rnd_sim": 0.5,
             },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
