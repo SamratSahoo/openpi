@@ -1466,7 +1466,7 @@ _CONFIGS = [
         name="pi05polaris-droid+toys300vae35krndsim-jointpos-stream",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
         data=LeRobotDROIDDataConfig(
-            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae_rnd_sim"],
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae35k_rnd_sim"],
             streaming=True,
             joint_position_actions=True,
             nonidle_filter_paths={
@@ -1476,7 +1476,7 @@ _CONFIGS = [
             # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
             sampling_weights={
                 "lerobot/droid_1.0.1": 0.5,
-                "SamratSahoo/toys300_vae_rnd_sim": 0.5,
+                "SamratSahoo/toys300_vae35k_rnd_sim": 0.5,
             },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
@@ -1495,7 +1495,7 @@ _CONFIGS = [
         name="pi05polaris-droid+toys300vaerndsim-jointpos-stream",
         model=pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=15),
         data=LeRobotDROIDDataConfig(
-            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae35k_rnd_sim"],
+            repo_id=["lerobot/droid_1.0.1", "SamratSahoo/toys300_vae_rnd_sim"],
             streaming=True,
             joint_position_actions=True,
             nonidle_filter_paths={
@@ -1505,7 +1505,7 @@ _CONFIGS = [
             # make the tiny toys set ~1-2%). Equal relative weights oversample toys to match DROID.
             sampling_weights={
                 "lerobot/droid_1.0.1": 0.5,
-                "SamratSahoo/toys300_vae35k_rnd_sim": 0.5,
+                "SamratSahoo/toys300_vae_rnd_sim": 0.5,
             },
             base_config=DataConfig(prompt_from_task=True),
             assets=AssetsConfig(
