@@ -128,6 +128,13 @@ class DataConfig:
     # (oversampling the smaller one). Only used by the streaming loader.
     sampling_weights: Mapping[str, float] = dataclasses.field(default_factory=dict)
 
+    # Per-repo cap on how many episodes to use, keyed by repo_id (repo_id -> episode count). Only the
+    # FIRST N episodes (by episode index) of a listed repo are used; repos absent from the mapping (the
+    # default, an empty dict) use ALL of their episodes. A cap larger than a repo's episode count is
+    # clamped to "use all". Example: {"user/toys300_sim": 20} trains on only the first 20 of 300
+    # episodes. Honored by both the map-style (download) and streaming loaders.
+    max_episodes: Mapping[str, int] = dataclasses.field(default_factory=dict)
+
 
 class GroupFactory(Protocol):
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
@@ -238,6 +245,9 @@ class DataConfigFactory(abc.ABC):
     # Explicit per-repo mixing weights for a streamed multi-repo mixture. Empty => size-proportional.
     # See DataConfig.sampling_weights.
     sampling_weights: Mapping[str, float] = dataclasses.field(default_factory=dict)
+    # Per-repo cap on how many (first-N) episodes to use, keyed by repo_id. Empty => use all episodes of
+    # every repo. See DataConfig.max_episodes.
+    max_episodes: Mapping[str, int] = dataclasses.field(default_factory=dict)
 
     @abc.abstractmethod
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -245,6 +255,17 @@ class DataConfigFactory(abc.ABC):
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
+        # Validate the episode cap once here -- the single chokepoint for both the map-style (download) and
+        # streaming loaders -- so a typo'd repo id or non-positive count fails fast and identically for both
+        # instead of the download path silently ignoring the entry and training on all episodes.
+        if self.max_episodes:
+            repos = set(repo_id_as_list(repo_id) or [])
+            extra = sorted(k for k in self.max_episodes if k not in repos)
+            if extra:
+                raise ValueError(f"max_episodes references repos not in repo_id {sorted(repos)}: {extra}.")
+            non_positive = {k: v for k, v in self.max_episodes.items() if int(v) <= 0}
+            if non_positive:
+                raise ValueError(f"max_episodes values must be positive integers; got {non_positive}.")
         asset_id = self.assets.asset_id or combined_asset_id(repo_id)
         return dataclasses.replace(
             self.base_config or DataConfig(),
@@ -257,6 +278,7 @@ class DataConfigFactory(abc.ABC):
             nonidle_filter_paths=self.nonidle_filter_paths,
             joint_position_actions=self.joint_position_actions,
             sampling_weights=self.sampling_weights,
+            max_episodes=self.max_episodes,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:

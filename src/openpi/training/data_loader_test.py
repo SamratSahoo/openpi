@@ -1,6 +1,8 @@
 import dataclasses
+import pathlib
 
 import jax
+import pytest
 
 from openpi.models import pi0_config
 from openpi.training import config as _config
@@ -60,6 +62,38 @@ def test_with_fake_dataset():
 
     for _, actions in batches:
         assert actions.shape == (config.batch_size, config.model.action_horizon, config.model.action_dim)
+
+
+def _base_data_config(**factory_kwargs):
+    """Resolve a DataConfig via the factory chokepoint (create_base_config) without touching the Hub.
+
+    create_base_config is where max_episodes is validated for BOTH the map-style and streaming loaders;
+    norm-stat loading from the (non-existent) local assets dir falls back to None.
+    """
+    model = pi0_config.Pi0Config(pi05=True, action_dim=32, action_horizon=16)
+    factory = _config.LeRobotDROIDDataConfig(repo_id="user/toys300", **factory_kwargs)
+    return factory.create_base_config(pathlib.Path("./assets/does-not-exist"), model)
+
+
+def test_max_episodes_valid_threads_through():
+    data_config = _base_data_config(max_episodes={"user/toys300": 20})
+    assert data_config.max_episodes == {"user/toys300": 20}
+
+
+def test_max_episodes_default_is_empty():
+    assert _base_data_config().max_episodes == {}
+
+
+def test_max_episodes_extra_repo_raises():
+    # A typo'd cap key that matches no repo must fail fast for BOTH loaders (was silently ignored by the
+    # map-style path). Streaming raised already; this covers the shared config-creation chokepoint.
+    with pytest.raises(ValueError, match="not in repo_id"):
+        _base_data_config(max_episodes={"user/toys_300": 20})
+
+
+def test_max_episodes_non_positive_raises():
+    with pytest.raises(ValueError, match="positive"):
+        _base_data_config(max_episodes={"user/toys300": 0})
 
 
 def test_with_real_dataset():

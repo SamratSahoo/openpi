@@ -302,11 +302,19 @@ class _HubSource:
     shipped to worker processes cheaply.
     """
 
-    def __init__(self, repo_id: str):
+    def __init__(self, repo_id: str, *, max_episodes: int | None = None):
         from huggingface_hub import HfApi
         from huggingface_hub import hf_hub_download
 
         self.repo_id = repo_id
+        # First-N-episodes cap for this repo (None => use all), set by _apply_episode_cap below.
+        # ``max_episodes`` is the clamped COUNT; ``kept_episodes`` is the exact SET of kept episode-index
+        # VALUES (the first N by ascending index). _stream_frames_v3 filters by set membership so it keeps
+        # exactly the episodes whose files/frames were selected, correct even if episode indices are not
+        # 0-based/contiguous. The v2.1 stream needs no in-stream check (one episode per parquet file, so the
+        # kept file prefix already contains exactly the kept episodes).
+        self.max_episodes: int | None = None
+        self.kept_episodes: set[int] | None = None
         api = HfApi()
         self._all_files = retry_call(
             lambda: api.list_repo_files(repo_id, repo_type="dataset"), what=f"listing files for {repo_id}"
@@ -327,6 +335,11 @@ class _HubSource:
             self._init_v30(info)
         else:
             self._init_v21(info, _download)
+
+        # Restrict to the first N episodes (updating files + total_frames) BEFORE the mixing-weight and
+        # keep-range fields are derived from total_frames below, so a capped repo mixes at its subset size.
+        if max_episodes is not None:
+            self._apply_episode_cap(int(max_episodes))
 
         # Optional non-idle keep-ranges (episode_index -> list of [start, end) frame ranges). When None,
         # every frame is sampled. Populated by StreamingLeRobotDataset only for repos with a configured
@@ -410,6 +423,11 @@ class _HubSource:
         self.episode_length: np.ndarray = np.asarray(meta["length"])[order].astype(np.int64)
         ep_data_chunk = np.asarray(meta["data/chunk_index"])[order].astype(np.int64)
         ep_data_file = np.asarray(meta["data/file_index"])[order].astype(np.int64)
+        # All indexed by position 0..E-1 in ascending-episode-index order, so _apply_episode_cap can select
+        # the first-N episodes' files, frame counts, and actual index values consistently.
+        self._episode_index_sorted: np.ndarray = np.asarray(meta["episode_index"])[order].astype(np.int64)
+        self._ep_data_chunk: np.ndarray = ep_data_chunk
+        self._ep_data_file: np.ndarray = ep_data_file
         self.episode_video: dict[str, dict[str, np.ndarray]] = {}
         for raw_key in self.video_key_map:
             self.episode_video[raw_key] = {
@@ -438,6 +456,49 @@ class _HubSource:
         except Exception:
             logger.warning("Could not load meta/tasks.parquet for %s; prompts from task unavailable.", self.repo_id)
         self.tasks: dict[int, str] = tasks
+
+    def _apply_episode_cap(self, max_episodes: int) -> None:
+        """Restrict this source to its first ``max_episodes`` episodes (by ascending episode index).
+
+        Prunes ``self.files`` to only the data files holding a kept episode and shrinks ``self.total_frames``
+        to the kept episodes' frame count, so downstream mixing weights reflect the subset. A cap >= the
+        repo's episode count is a no-op ("use all"). ``self.kept_episodes`` records the exact index VALUES of
+        the kept episodes so ``_stream_frames_v3`` keeps precisely them (a boundary data file may also hold
+        dropped episodes) -- by set membership, so it is correct even if episode indices are not
+        0-based/contiguous. v2.1 needs no in-stream check (one episode per sorted parquet file, so the kept
+        file prefix already contains exactly the kept episodes).
+        """
+        if max_episodes <= 0:
+            raise ValueError(f"max_episodes for {self.repo_id!r} must be positive, got {max_episodes}.")
+        if self.is_v30:
+            total_eps = int(self.episode_length.shape[0])
+            n = min(max_episodes, total_eps)
+            if n >= total_eps:
+                return
+            self.max_episodes = n
+            # Position 0..n-1 (ascending index order): their actual index values, files, and frame count.
+            # kept_files may include a boundary file that also holds a dropped episode; the stream filter
+            # (kept_episodes membership) excludes that episode.
+            self.kept_episodes = {int(e) for e in self._episode_index_sorted[:n]}
+            kept_files = {(int(c), int(f)) for c, f in zip(self._ep_data_chunk[:n], self._ep_data_file[:n], strict=True)}
+            self.files = [self.data_path.format(chunk_index=c, file_index=f) for c, f in sorted(kept_files)]
+            self.total_frames = int(self.episode_length[:n].sum())
+        else:
+            # v2.1: one episode per parquet file, files sorted by episode index -> first N files == first N
+            # episodes (indices 0..n-1). total_frames (from info.json) is over all episodes; scale it by the
+            # kept fraction so the size-proportional mixing weight tracks the subset (episode lengths vary,
+            # so this is an estimate -- exactly like the whole-repo count it replaces, it only sets a mixing
+            # proportion). kept_episodes is recorded for the (rare) filtered-repo weight calc; the v2.1
+            # stream itself relies only on the file prefix.
+            total_eps = len(self.files)
+            n = min(max_episodes, total_eps)
+            if n >= total_eps:
+                return
+            self.max_episodes = n
+            self.kept_episodes = set(range(n))
+            if self.total_frames and total_eps:
+                self.total_frames = round(self.total_frames * n / total_eps)
+            self.files = self.files[:n]
 
     def video_url(self, raw_key: str, episode: int) -> tuple[str, float, float, int]:
         """Return (fsspec video path, from_ts, to_ts, num_frames) for a camera of one episode (v3.0)."""
@@ -521,6 +582,23 @@ def _mixing_weight(source: _HubSource, sampling_weights: Mapping[str, float] | N
     return float(source.sampleable_frames) or 1.0
 
 
+def _v21_only_starves_ranks(sources: Sequence[_HubSource], world_size: int) -> bool:
+    """True if some DDP rank would stream nothing (and stall the collective) under this source layout.
+
+    Under DDP each rank streams ``source.files[rank::world_size]`` for a v2.1 source, which is empty for
+    ``rank >= len(files)``; a v3.0 source instead covers every rank (``_v3_shard_plan`` gives each shard a
+    file). So a rank is starved only when there is NO v3.0 source and every v2.1 source has fewer files than
+    ``world_size`` -- then the top ranks own zero files, return an empty generator list, and stall the
+    all-reduce. Capping a v2.1 repo small enough can trigger this. ``world_size <= 1`` (the JAX
+    single-process path) never starves, so the guard is a no-op there.
+    """
+    if world_size <= 1:
+        return False
+    if any(source.is_v30 for source in sources):
+        return False
+    return max((len(source.files) for source in sources if not source.is_v30), default=0) < world_size
+
+
 class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
     """Iterable dataset that streams (and mixes) LeRobot datasets from the Hub.
 
@@ -544,6 +622,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         filter_paths: Mapping[str, str] | None = None,
         joint_position_actions: bool = False,
         sampling_weights: Mapping[str, float] | None = None,
+        max_episodes: Mapping[str, int] | None = None,
     ):
         super().__init__()
         if isinstance(repo_ids, str):
@@ -578,6 +657,19 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             non_positive = {k: v for k, v in self.sampling_weights.items() if not (float(v) > 0.0)}
             if non_positive:
                 raise ValueError(f"sampling_weights values must be positive; got non-positive {non_positive}.")
+
+        # Per-repo first-N-episodes cap (repo_id -> episode count). Empty/None => use every episode of
+        # every repo. Entries must reference repos in the mixture and be positive integers; a cap larger
+        # than a repo's episode count is clamped to "use all" later (in _HubSource._apply_episode_cap).
+        self.max_episodes = {k: int(v) for k, v in max_episodes.items()} if max_episodes else {}
+        if self.max_episodes:
+            extra = [k for k in self.max_episodes if k not in set(self.repo_ids)]
+            if extra:
+                raise ValueError(f"max_episodes has entries for repos not in the mixture: {extra}.")
+            non_positive = {k: v for k, v in self.max_episodes.items() if v <= 0}
+            if non_positive:
+                raise ValueError(f"max_episodes values must be positive integers; got {non_positive}.")
+
         # Joint-position training additionally requests the action.joint_position column; velocity
         # configs keep the original column set so datasets without that column stream unchanged.
         self._v3_lowdim_columns = _V3_LOWDIM_COLUMNS + (
@@ -595,7 +687,21 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         _streaming_used["value"] = True
 
         # Fetch all Hub metadata up front (main process, before worker fork/spawn).
-        self.sources: list[_HubSource] = [_HubSource(repo_id) for repo_id in self.repo_ids]
+        self.sources: list[_HubSource] = [
+            _HubSource(repo_id, max_episodes=self.max_episodes.get(repo_id)) for repo_id in self.repo_ids
+        ]
+
+        # Fail fast on a DDP layout where some rank would stream nothing and hang the collective -- e.g. a
+        # v2.1 repo capped below the GPU count with no v3.0 source to cover the remaining ranks. Only the
+        # multi-process (world_size > 1) path can hit this; the JAX single-process flow is unaffected.
+        if _v21_only_starves_ranks(self.sources, self._ddp_world_size):
+            max_v21 = max((len(s.files) for s in self.sources if not s.is_v30), default=0)
+            raise ValueError(
+                f"Under DDP with world_size={self._ddp_world_size}, no source covers every rank: there is no "
+                f"v3.0 source and the largest v2.1 source has only {max_v21} file(s) (one episode each), so "
+                f"ranks beyond that would stream nothing and stall training. Lower world_size, raise the "
+                f"max_episodes cap, or include a v3.0 source in the mixture."
+            )
 
         # Fail fast at construction (not at the first training batch) if prompts are required but a
         # repo's task metadata could not be loaded.
@@ -629,8 +735,14 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             if path is None:
                 continue
             source.keep_ranges = _load_keep_ranges(path)
+            # A capped source only samples its kept episodes, so exclude the rest from its kept-frame mixing
+            # weight (keep_ranges is keyed by episode index; kept_episodes is the kept index set).
+            kept = source.kept_episodes
             source.sampleable_frames = sum(
-                end - start for ranges in source.keep_ranges.values() for start, end in ranges
+                end - start
+                for episode, ranges in source.keep_ranges.items()
+                if kept is None or episode in kept
+                for start, end in ranges
             )
             logger.info(
                 "Loaded non-idle filter for %s: %d episodes, %d/%d frames kept (%.1f%%).",
@@ -777,13 +889,26 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
                     boundaries = np.nonzero(np.diff(episode_col))[0] + 1
                     seg_starts = np.concatenate([[0], boundaries])
                     seg_ends = np.concatenate([boundaries, [len(episode_col)]])
-                    # Map this shard's (group, num_groups) onto THIS file's episode count so it always owns
-                    # >= 1 episode (see _episode_owner). Consistent across the shards sharing the file since
-                    # they read the same segments in the same order.
-                    divisor, remainder = _episode_owner(len(seg_starts), episode_group, num_episode_groups)
-                    for local_ordinal, (seg_start, seg_end) in enumerate(zip(seg_starts, seg_ends, strict=True)):
+                    # Segments this file contributes: all of them, minus any episode not in the first-N cap
+                    # (source.kept_episodes). A capped repo only ever drops segments of a boundary file;
+                    # _apply_episode_cap already pruned every file that holds no kept episode, so `allowed`
+                    # is non-empty for every file we stream here.
+                    allowed = [
+                        idx
+                        for idx, seg_start in enumerate(seg_starts)
+                        if source.kept_episodes is None or int(episode_col[seg_start]) in source.kept_episodes
+                    ]
+                    if not allowed:
+                        continue
+                    # Map this shard's (group, num_groups) onto the file's KEPT episode count so it always
+                    # owns >= 1 episode (see _episode_owner). Consistent across the shards sharing the file
+                    # since they read the same segments in the same order. With no cap `allowed` is every
+                    # segment, so this reduces exactly to partitioning the whole file.
+                    divisor, remainder = _episode_owner(len(allowed), episode_group, num_episode_groups)
+                    for local_ordinal, seg_idx in enumerate(allowed):
                         if local_ordinal % divisor != remainder:
                             continue  # not this shard's episode; skip before any (expensive) video decode.
+                        seg_start, seg_end = int(seg_starts[seg_idx]), int(seg_ends[seg_idx])
                         produced = True
                         episode = int(episode_col[seg_start])
                         seg_len = int(seg_end - seg_start)

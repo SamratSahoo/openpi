@@ -129,10 +129,22 @@ class FakeDataset(Dataset):
 
 
 def _create_single_lerobot_dataset(repo_id: str, data_config: _config.DataConfig, action_horizon: int) -> Dataset:
-    """Create a map-style dataset for a single LeRobot repo."""
+    """Create a map-style dataset for a single LeRobot repo.
+
+    If ``data_config.max_episodes`` caps this repo, only the first N episodes (by episode index) are
+    loaded via LeRobot's ``episodes`` argument; a cap larger than the repo's episode count is clamped.
+    """
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+
+    # max_episodes is validated (positive, known repo) upstream in DataConfigFactory.create_base_config.
+    episodes = None
+    max_eps = data_config.max_episodes.get(repo_id)
+    if max_eps is not None:
+        episodes = list(range(min(int(max_eps), dataset_meta.total_episodes)))
+
     dataset = lerobot_dataset.LeRobotDataset(
         repo_id,
+        episodes=episodes,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
@@ -183,6 +195,7 @@ def create_streaming_dataset(
         filter_paths=data_config.nonidle_filter_paths,
         joint_position_actions=data_config.joint_position_actions,
         sampling_weights=data_config.sampling_weights,
+        max_episodes=data_config.max_episodes,
     )
 
 
