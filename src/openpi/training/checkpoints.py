@@ -17,6 +17,32 @@ import openpi.training.data_loader as _data_loader
 import openpi.training.utils as training_utils
 
 
+def _mkdir(directory: epath.Path) -> None:
+    """Create a checkpoint directory, and refuse to continue if it did not actually appear.
+
+    An object store has no directories: a prefix with no objects under it does not exist. Whether
+    `mkdir()` papers over that depends on which backend epath picked, and epath picks by what happens
+    to be *installed* -- `tf.io.gfile` writes a zero-byte marker object and reports the directory as
+    existing, while the fsspec/gcsfs fallback (what you get when TensorFlow is absent) makes `mkdir()`
+    a silent no-op on a sub-prefix.
+
+    Orbax cannot run on the second one, and not just here: it creates each step's directory and then
+    immediately reads a metadata file back out of it, so a `gs://` run without TensorFlow installed
+    dies either at startup ("Checkpoint root directory ... does not exist") or, more confusingly, in
+    the background commit thread of its first save. Papering over the root alone would only move the
+    crash. So check the invariant once, up front, and say what to do about it.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    if directory.exists():
+        return
+    raise RuntimeError(
+        f"Created {directory}, but it still does not exist. epath can only create directories on an "
+        "object store through its TensorFlow backend; the fsspec/gcsfs fallback silently does nothing, "
+        "and orbax needs a real directory for every checkpoint step. Install tensorflow-cpu in the "
+        "training environment, or point --checkpoint-base-dir at a local path."
+    )
+
+
 def initialize_checkpoint_dir(
     checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
 ) -> tuple[ocp.CheckpointManager, bool]:
@@ -27,7 +53,7 @@ def initialize_checkpoint_dir(
     if checkpoint_dir.exists():
         if overwrite:
             checkpoint_dir.rmtree()
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            _mkdir(checkpoint_dir)
             logging.info(f"Wiped checkpoint directory {checkpoint_dir}")
         elif resume:
             resuming = True
@@ -37,7 +63,7 @@ def initialize_checkpoint_dir(
                 "to indicate how to handle it."
             )
 
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir(checkpoint_dir)
 
     mngr = ocp.CheckpointManager(
         checkpoint_dir,
