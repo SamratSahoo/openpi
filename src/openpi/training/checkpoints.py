@@ -20,7 +20,9 @@ import openpi.training.utils as training_utils
 def initialize_checkpoint_dir(
     checkpoint_dir: epath.Path | str, *, keep_period: int | None, overwrite: bool, resume: bool
 ) -> tuple[ocp.CheckpointManager, bool]:
-    checkpoint_dir = epath.Path(checkpoint_dir).resolve()
+    # Not `.resolve()`: it rewrites a `gs://` URL into a cwd-relative local path. Callers hand us
+    # `TrainConfig.checkpoint_dir`, which has already absolutized the local case.
+    checkpoint_dir = epath.Path(checkpoint_dir)
     resuming = False
     if checkpoint_dir.exists():
         if overwrite:

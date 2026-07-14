@@ -8,6 +8,7 @@ import logging
 import os
 import pathlib
 from typing import Any, Literal, Protocol, TypeAlias
+import urllib.parse
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -31,6 +32,11 @@ import openpi.transforms as _transforms
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
+
+
+def is_remote_path(path: str) -> bool:
+    """True for an object-storage URL (`gs://...`, `s3://...`), false for a local filesystem path."""
+    return urllib.parse.urlparse(str(path)).scheme != ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -616,7 +622,9 @@ class TrainConfig:
 
     # Base directory for config assets (e.g., norm stats).
     assets_base_dir: str = "./assets"
-    # Base directory for checkpoints.
+    # Base directory for checkpoints. May be a cloud URL (e.g. `gs://bucket/prefix`), in which case
+    # orbax streams checkpoints straight to object storage and never stages them on local disk --
+    # which is what makes a large model trainable on a VM whose disk cannot hold two checkpoints.
     checkpoint_base_dir: str = "./checkpoints"
 
     # Random seed that will be used by random generators during training.
@@ -659,11 +667,19 @@ class TrainConfig:
         return (pathlib.Path(self.assets_base_dir) / self.name).resolve()
 
     @property
-    def checkpoint_dir(self) -> pathlib.Path:
-        """Get the checkpoint directory for this config."""
+    def checkpoint_dir(self) -> epath.Path:
+        """Get the checkpoint directory for this config.
+
+        `epath`, not `pathlib`: `checkpoint_base_dir` may be a cloud URL, and pathlib collapses the
+        `//` in a scheme, silently turning `gs://bucket/x` into the *relative* path `gs:/bucket/x`.
+        `resolve()` has the same effect on a remote path -- it rewrites it against the cwd -- so it
+        is applied only to local paths, where it is still needed to absolutize the `./checkpoints`
+        default.
+        """
         if not self.exp_name:
             raise ValueError("--exp_name must be set")
-        return (pathlib.Path(self.checkpoint_base_dir) / self.name / self.exp_name).resolve()
+        directory = epath.Path(self.checkpoint_base_dir) / self.name / self.exp_name
+        return directory if is_remote_path(self.checkpoint_base_dir) else directory.resolve()
 
     @property
     def trainable_filter(self) -> nnx.filterlib.Filter:
