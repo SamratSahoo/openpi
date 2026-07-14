@@ -1,0 +1,24 @@
+# pi0_fast_full_droid_finetune
+model:
+  type: pi0_fast
+  action_dim: 8
+  action_horizon: 16
+  max_token_len: 180
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi0_fast_base/params
+lr_schedule:
+  type: cosine_decay
+  peak_lr: 5.0e-05
+  decay_steps: 1000000
+  decay_lr: 5.0e-05
+data:
+  type: rlds_droid
+  repo_id: droid
+  rlds_data_dir: <path_to_droid_rlds_dataset>
+  action_space: JOINT_POSITION
+batch_size: 256
+num_workers: 0
+num_train_steps: 100000
+save_interval: 5000
+keep_period: 20000

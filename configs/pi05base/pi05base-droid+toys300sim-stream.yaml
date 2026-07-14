@@ -1,0 +1,22 @@
+# pi05base-droid+toys300sim-stream
+model:
+  type: pi0
+  action_horizon: 16
+  max_token_len: 200
+  pi05: true
+  discrete_state_input: true
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi05_base/params
+data:
+  type: lerobot_droid
+  repo_id:
+  - lerobot/droid_1.0.1
+  - SamratSahoo/toys300_sim
+  base_config:
+    prompt_from_task: true
+  streaming: true
+  nonidle_filter_paths:
+    lerobot/droid_1.0.1: filters/lerobot_droid_1.0.1.json
+num_train_steps: 100000
+save_interval: 50000

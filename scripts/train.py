@@ -56,16 +56,27 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
     ckpt_dir = config.checkpoint_dir
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
+
+    # The run id lives beside the checkpoints, so a job that resumes from them rejoins its own W&B
+    # run instead of opening a second one. On a preemptible TPU that is the difference between one
+    # continuous curve and a new chart per preemption.
+    id_file = ckpt_dir / "wandb_id.txt"
     if resuming:
-        run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        run_id = id_file.read_text().strip()
+        # `allow`, not `must`: the id can outlive the run it named. A first attempt that was
+        # preempted before its first log, or that ran with WANDB_MODE=offline, leaves an id W&B has
+        # never heard of -- and `must` turns that into a hard failure that kills the retry, on a run
+        # that is otherwise perfectly resumable from its checkpoint. `allow` continues the run when
+        # it exists and (re)creates it under the same id when it doesn't.
+        logging.info(f"Resuming W&B run {run_id}")
+        wandb.init(id=run_id, resume="allow", name=config.exp_name, project=config.project_name)
     else:
         wandb.init(
             name=config.exp_name,
             config=dataclasses.asdict(config),
             project=config.project_name,
         )
-        (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
+        id_file.write_text(wandb.run.id)
 
     if log_code:
         wandb.run.log_code(epath.Path(__file__).parent.parent)

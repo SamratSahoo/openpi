@@ -1,0 +1,18 @@
+# pi0_libero_low_mem_finetune
+model:
+  type: pi0
+  max_token_len: 48
+  paligemma_variant: gemma_2b_lora
+  action_expert_variant: gemma_300m_lora
+  discrete_state_input: false
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi0_base/params
+ema_decay: null
+freeze_filter: from_model
+data:
+  type: lerobot_libero
+  repo_id: physical-intelligence/libero
+  base_config:
+    prompt_from_task: true
+  extra_delta_transform: true

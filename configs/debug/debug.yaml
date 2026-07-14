@@ -1,0 +1,13 @@
+# debug
+exp_name: debug
+model:
+  type: pi0
+  max_token_len: 48
+  paligemma_variant: dummy
+  action_expert_variant: dummy
+  discrete_state_input: false
+batch_size: 2
+num_train_steps: 10
+save_interval: 100
+overwrite: true
+wandb_enabled: false

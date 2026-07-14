@@ -196,6 +196,7 @@ def create_streaming_dataset(
         joint_position_actions=data_config.joint_position_actions,
         sampling_weights=data_config.sampling_weights,
         max_episodes=data_config.max_episodes,
+        mirror_root=data_config.mirror_root,
     )
 
 

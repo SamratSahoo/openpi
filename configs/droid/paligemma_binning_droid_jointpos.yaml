@@ -1,0 +1,27 @@
+# paligemma_binning_droid_jointpos
+model:
+  type: pi0_fast
+  action_dim: 8
+  action_horizon: 15
+  max_token_len: 600
+  fast_model_tokenizer: binning_tokenizer
+data:
+  type: simple
+  assets:
+    asset_id: droid
+  data_transforms:
+    inputs:
+    - type: droid_inputs
+      model_type: PI0_FAST
+    outputs:
+    - type: absolute_actions
+      mask:
+      - true
+      - true
+      - true
+      - true
+      - true
+      - true
+      - true
+      - false
+    - type: droid_outputs

@@ -1,0 +1,10 @@
+# pi0_libero
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi0_base/params
+data:
+  type: lerobot_libero
+  repo_id: physical-intelligence/libero
+  base_config:
+    prompt_from_task: true
+  extra_delta_transform: true

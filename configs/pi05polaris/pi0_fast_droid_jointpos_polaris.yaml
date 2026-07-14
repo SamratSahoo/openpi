@@ -1,0 +1,34 @@
+# pi0_fast_droid_jointpos_polaris
+model:
+  type: pi0_fast
+  action_dim: 8
+  action_horizon: 10
+  max_token_len: 180
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/polaris/pi0_fast_droid_jointpos_polaris/params
+lr_schedule:
+  type: cosine_decay
+  peak_lr: 5.0e-05
+  decay_steps: 1000000
+  decay_lr: 5.0e-05
+data:
+  type: rlds_droid
+  assets:
+    assets_dir: gs://openpi-assets/checkpoints/polaris/pi0_fast_droid_jointpos_polaris/assets
+    asset_id: droid
+  rlds_data_dir: <path_to_droid_rlds_dataset>
+  action_space: JOINT_POSITION
+  datasets:
+  - name: droid
+    version: 1.0.1
+    weight: 0.9
+    filter_dict_path: gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json
+  - name: polaris_droid_cotrain_dataset
+    version: 1.0.0
+    weight: 0.1
+    filter_dict_path: gs://openpi-assets/droid/polaris_droid_cotrain_dataset_sample_ranges_v1_0_0.json
+batch_size: 128
+num_workers: 0
+num_train_steps: 1000
+keep_period: 1000

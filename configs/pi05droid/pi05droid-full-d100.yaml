@@ -1,0 +1,19 @@
+# pi05droid-full-d100
+model:
+  type: pi0
+  action_horizon: 16
+  max_token_len: 200
+  pi05: true
+  discrete_state_input: true
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi05_droid/params
+data:
+  type: lerobot_droid
+  repo_id: SamratSahoo/d100
+  assets:
+    assets_dir: gs://openpi-assets/checkpoints/pi05_droid/assets
+    asset_id: droid
+  base_config:
+    prompt_from_task: true
+num_train_steps: 20000

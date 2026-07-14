@@ -50,6 +50,7 @@ import os
 from pathlib import Path
 import random
 import sys
+import tempfile
 import time
 import traceback
 
@@ -122,6 +123,44 @@ def run_main(fn: Callable[[], object]) -> None:
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
 _BASE_WAIT_S = 5.0
 _MAX_WAIT_S = 300.0
+
+# A 401/403 from a *presigned content URL* is not a permissions verdict.
+#
+# Hub file bytes are served from a CAS/CDN bridge (cas-bridge.xethub.hf.co, cdn-lfs*) behind a
+# short-lived signed URL, and that bridge rejects requests transiently -- under load, or on a URL
+# that expired mid-read. It is not a statement about your access: a run can stream the same public
+# dataset for hours and then take a 403 on one range request. Re-opening the file mints a fresh URL,
+# so a retry fixes it, and `_decode_video_frames` re-opens on every call.
+#
+# The bridge speaks BOTH codes: 403 `AccessDenied` when the signature is rejected, and 401 when it
+# considers the request unauthenticated (e.g. an expired signature on a range read). Authorization
+# to the bridge lives in the URL signature, not in HF_TOKEN, so a 401 on a signed URL says the same
+# thing a 403 does -- "this URL is no longer good" -- and wants the same fix: mint a new one. Only
+# the Hub *API* (huggingface.co/api/...) issues a 401 that means "your token is bad"; that one still
+# fails fast below, because it is terminal.
+#
+# But a 401/403 CAN also be real (a dataset flipped to private, a revoked token), and that would
+# never clear -- so unlike 429/5xx these are retried a BOUNDED number of times and then fail loudly,
+# rather than hanging the job forever behind a 5-minute backoff.
+#
+# The markers must identify a signed URL by SHAPE, not by CDN vendor. The Hub routes clients to
+# different edges -- `cas-bridge.xethub.hf.co` (CloudFront: `X-Amz-Signature`, `Key-Pair-Id=K...`)
+# from most networks, but `us.gcp.cdn.hf.co` (Google Cloud CDN: bare `Signature`, ULID `Key-Pair-Id`)
+# for GCP-hosted clients like our TPU workers. A vendor-specific list silently misses the edge you
+# are actually routed to, classifies its 403 as terminal, and crashes on the first attempt with zero
+# retries -- exactly how the GCP edge's "SignatureError: invalid key pair id" killed a run. Matching
+# `key-pair-id=` / `signature=` / the `xet-bridge` path covers any edge that speaks this dialect.
+# The Hub *API* (huggingface.co/api/...) never carries these, so its 401/403 still fails fast.
+_PRESIGNED_AUTH_STATUS = {401, 403}
+_PRESIGNED_AUTH_MAX_ATTEMPTS = 8
+_PRESIGNED_URL_MARKERS = (
+    "xethub.hf.co",
+    "xet-bridge",
+    "cdn.hf.co",
+    "cdn-lfs",
+    "key-pair-id=",
+    "signature=",  # matches both `Signature=` (GCP) and `X-Amz-Signature=` (CloudFront).
+)
 # Largest header-provided wait we trust as "seconds until reset"; larger values are treated as an
 # (unusable) absolute epoch timestamp and ignored in favor of backoff.
 _MAX_TRUSTED_HEADER_WAIT_S = 3600.0
@@ -144,29 +183,55 @@ def _http_status(exc: BaseException) -> int | None:
     return None
 
 
-def _is_retryable(exc: BaseException) -> bool:
-    """Return True for Hub rate-limit / transient network errors that we should wait out.
+def _is_presigned_content_url(exc: BaseException) -> bool:
+    """Did this error come from a signed Hub content URL (the CAS/CDN bridge), not the Hub API?
 
-    A definite HTTP status is authoritative: only transient statuses (429/5xx/408/425) are retried,
-    so terminal errors like 401/403/404 fail fast instead of spinning forever (this also correctly
-    handles aiohttp.ClientResponseError, whose status we extract). Exceptions with no status are
-    retried only if they are recognized transport/connection errors, plus a narrow phrase-based
-    fallback (deliberately not matching bare numbers like "503", which would false-match "50302").
+    Checked on the response's URL, falling back to the message: huggingface_hub renders the URL into
+    HfHubHTTPError's text ("Cannot access content at: https://cas-bridge.xethub.hf.co/…").
+    """
+    response = getattr(exc, "response", None)
+    url = getattr(response, "url", None) or getattr(getattr(response, "request", None), "url", None)
+    haystack = f"{url or ''} {exc}".lower()
+    return any(marker in haystack for marker in _PRESIGNED_URL_MARKERS)
+
+
+def _retry_kind(exc: BaseException) -> str | None:
+    """How to treat ``exc``: ``None`` (fail), ``"transient"`` (retry forever), or ``"presigned-auth"``.
+
+    A definite HTTP status is authoritative: only transient statuses (429/5xx/408/425) are retried
+    forever, so terminal errors like 404 fail fast instead of spinning (this also correctly handles
+    aiohttp.ClientResponseError, whose status we extract). The one exception is a 401/403 from a
+    signed content URL, which the CAS/CDN bridge hands out transiently -- see
+    _PRESIGNED_AUTH_MAX_ATTEMPTS. The same codes from the Hub API are terminal and still fail fast.
+    Exceptions with no status are retried only if they are recognized transport/connection errors,
+    plus a narrow phrase-based fallback (deliberately not matching bare numbers like "503", which
+    would false-match "50302").
     """
     status = _http_status(exc)
     if status is not None:
-        return status in _RETRYABLE_STATUS
+        if status in _RETRYABLE_STATUS:
+            return "transient"
+        if status in _PRESIGNED_AUTH_STATUS and _is_presigned_content_url(exc):
+            return "presigned-auth"
+        return None
     if requests is not None and isinstance(
         exc,
         requests.exceptions.ConnectionError | requests.exceptions.Timeout | requests.exceptions.ChunkedEncodingError,
     ):
-        return True
+        return "transient"
     if aiohttp is not None and isinstance(exc, aiohttp.ClientError):
-        return True
+        return "transient"
     if isinstance(exc, ConnectionError | TimeoutError):
-        return True
+        return "transient"
     message = str(exc).lower()
-    return any(needle in message for needle in ("too many requests", "rate limit", "ratelimit", "timed out"))
+    if any(needle in message for needle in ("too many requests", "rate limit", "ratelimit", "timed out")):
+        return "transient"
+    return None
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Whether ``exc`` is worth retrying at all. See ``_retry_kind`` for how long."""
+    return _retry_kind(exc) is not None
 
 
 def _retry_wait_seconds(exc: BaseException, attempt: int) -> float:
@@ -192,15 +257,36 @@ def _retry_wait_seconds(exc: BaseException, attempt: int) -> float:
 
 
 def retry_call(fn, *, what: str):
-    """Call ``fn`` with unbounded retry-on-transient-error and capped backoff."""
+    """Call ``fn``, retrying transient Hub errors with capped backoff.
+
+    Rate limits and 5xx are retried forever ("waiting is fine, crashing is not"). A 401/403 from a
+    signed content URL is retried too -- the CDN issues those transiently -- but only
+    ``_PRESIGNED_AUTH_MAX_ATTEMPTS`` times, so a rejection that is a genuine permissions change fails
+    with a real error instead of stalling the run indefinitely.
+    """
     attempt = 0
+    presigned_auth_attempts = 0
     while True:
         try:
             return fn()
         except Exception as exc:
-            if not _is_retryable(exc):
+            kind = _retry_kind(exc)
+            if kind is None:
                 raise
             attempt += 1
+            if kind == "presigned-auth":
+                presigned_auth_attempts += 1
+                if presigned_auth_attempts > _PRESIGNED_AUTH_MAX_ATTEMPTS:
+                    logger.error(
+                        "Hub content URL kept rejecting us (HTTP %s) while %s after %d attempts. A "
+                        "signed-URL 401/403 is normally transient, so this looks like a real access "
+                        "problem: check the dataset is still public, or that HF_TOKEN is set and "
+                        "valid (an unauthenticated stream is throttled far more aggressively).",
+                        _http_status(exc),
+                        what,
+                        presigned_auth_attempts,
+                    )
+                    raise
             wait = _retry_wait_seconds(exc, attempt)
             logger.warning(
                 "Transient Hub error while %s (attempt %d); sleeping %.1fs then retrying: %r",
@@ -295,18 +381,32 @@ def _decode_video_frames(fs, video_path: str, from_ts: float, to_ts: float, num_
 
 
 class _HubSource:
-    """Immutable, picklable metadata for one HF LeRobot dataset repo.
+    """Immutable, picklable metadata for one LeRobot dataset repo.
 
-    All Hub access happens here (in the main process, before workers are forked/spawned); the
+    All catalog access happens here (in the main process, before workers are forked/spawned); the
     resulting object holds only small, picklable data (file list, tasks, counts) so it can be
     shipped to worker processes cheaply.
+
+    The repo's bytes come from one of two backends, selected by ``mirror_root``:
+
+    * ``None`` (default) -- the HuggingFace Hub (``hf://datasets/<repo_id>/...``).
+    * ``gs://bucket/prefix`` -- a *mirror* of the repo at ``<mirror_root>/<repo_id>/...``, read with
+      gcsfs. Same files, same layout, same v3.0 reader; only the bytes' origin changes.
+
+    The mirror exists because the Hub's CDN cannot be relied on from GCP: it routes GCP-hosted
+    clients to a Google Cloud CDN edge that rejects its own signed URLs ("SignatureError: invalid key
+    pair id"), which kills TPU runs outright. Reading from a bucket in the training region also
+    removes the cross-cloud hop. Note this is NOT the same as LeRobot's non-streaming path -- that one
+    is map-style, needs the whole dataset on local disk, and cannot read v3.0 at all under the pinned
+    lerobot (CODEBASE_VERSION "v2.1"). Mirroring keeps this v3.0 reader and just re-points it.
+
+    ``fsspec`` filesystem objects are NOT held on the instance: they are built on demand (see
+    ``new_fs``), because this object is pickled out to dataloader worker processes.
     """
 
-    def __init__(self, repo_id: str, *, max_episodes: int | None = None):
-        from huggingface_hub import HfApi
-        from huggingface_hub import hf_hub_download
-
+    def __init__(self, repo_id: str, *, max_episodes: int | None = None, mirror_root: str | None = None):
         self.repo_id = repo_id
+        self.mirror_root: str | None = mirror_root.rstrip("/") if mirror_root else None
         # First-N-episodes cap for this repo (None => use all), set by _apply_episode_cap below.
         # ``max_episodes`` is the clamped COUNT; ``kept_episodes`` is the exact SET of kept episode-index
         # VALUES (the first N by ascending index). _stream_frames_v3 filters by set membership so it keeps
@@ -315,15 +415,11 @@ class _HubSource:
         # kept file prefix already contains exactly the kept episodes).
         self.max_episodes: int | None = None
         self.kept_episodes: set[int] | None = None
-        api = HfApi()
-        self._all_files = retry_call(
-            lambda: api.list_repo_files(repo_id, repo_type="dataset"), what=f"listing files for {repo_id}"
+        self._all_files = retry_call(self._list_files, what=f"listing files for {self.origin}")
+
+        info_path = retry_call(
+            lambda: self._download("meta/info.json"), what=f"downloading info.json for {self.origin}"
         )
-
-        def _download(rel: str) -> str:
-            return hf_hub_download(repo_id, rel, repo_type="dataset")
-
-        info_path = retry_call(lambda: _download("meta/info.json"), what=f"downloading info.json for {repo_id}")
         with open(info_path) as f:
             info = json.load(f)
         self.codebase_version: str = str(info.get("codebase_version", ""))
@@ -334,7 +430,7 @@ class _HubSource:
         if self.is_v30:
             self._init_v30(info)
         else:
-            self._init_v21(info, _download)
+            self._init_v21(info, self._download)
 
         # Restrict to the first N episodes (updating files + total_frames) BEFORE the mixing-weight and
         # keep-range fields are derived from total_frames below, so a capped repo mixes at its subset size.
@@ -346,6 +442,86 @@ class _HubSource:
         # filter path. ``sampleable_frames`` is the mixing weight (kept frames if filtered, else total).
         self.keep_ranges: dict[int, list[tuple[int, int]]] | None = None
         self.sampleable_frames: int = self.total_frames
+
+    # -- Backend: the Hub, or a mirror of it. ------------------------------------------------------
+
+    @property
+    def origin(self) -> str:
+        """Human-readable source of this repo's bytes, for log/error messages."""
+        return self.repo_url if self.mirror_root else self.repo_id
+
+    @property
+    def repo_url(self) -> str:
+        """Root under which this repo's files live, as a full URL (mirror backends only)."""
+        return f"{self.mirror_root.rstrip('/')}/{self.repo_id}"
+
+    @property
+    def repo_root(self) -> str:
+        """Root under which this repo's files live, in fsspec terms (mirror backends only)."""
+        # gcsfs takes bucket-relative paths (`find` returns them that way), so strip the scheme here and
+        # keep `repo_url` as the only place that speaks a full URL.
+        return self.repo_url.removeprefix("gs://")
+
+    def new_fs(self):
+        """Build a fresh fsspec filesystem for this repo's backend.
+
+        Called per-process (constructor, and again inside each dataloader worker) rather than cached
+        on the instance: fsspec filesystems hold sockets/loops and must not be pickled across the
+        worker fork.
+        """
+        if self.mirror_root is None:
+            from huggingface_hub import HfFileSystem
+
+            return HfFileSystem()
+        if self.mirror_root.startswith("gs://"):
+            import gcsfs
+
+            return gcsfs.GCSFileSystem()
+        # Any other mirror root is a plain directory (a local disk, an NFS/Lustre scratch mount).
+        import fsspec
+
+        return fsspec.filesystem("file")
+
+    def fs_path(self, rel: str) -> str:
+        """fsspec-native path for a repo-relative file (what ``new_fs().open()`` takes)."""
+        if self.mirror_root:
+            return f"{self.repo_root}/{rel}"
+        return f"datasets/{self.repo_id}/{rel}"
+
+    def urls(self, files: Sequence[str]) -> list[str]:
+        """Protocol-qualified URLs (what the ``datasets`` parquet builder takes)."""
+        if self.mirror_root:
+            return [f"{self.repo_url}/{rel}" for rel in files]
+        return [f"hf://datasets/{self.repo_id}/{rel}" for rel in files]
+
+    def _list_files(self) -> list[str]:
+        """Every repo-relative file path in the repo."""
+        if self.mirror_root:
+            fs = self.new_fs()
+            base = self.repo_root
+            found = fs.find(base)
+            if not found:
+                raise FileNotFoundError(
+                    f"No files under mirror {self.repo_url}. The mirror is missing or incomplete -- "
+                    f"re-run the dataset mirror before training."
+                )
+            # gcsfs returns bucket-relative paths ("bucket/prefix/repo/meta/info.json"); strip to "meta/...".
+            return sorted(p[len(base) :].lstrip("/") for p in found)
+        from huggingface_hub import HfApi
+
+        return HfApi().list_repo_files(self.repo_id, repo_type="dataset")
+
+    def _download(self, rel: str) -> str:
+        """Fetch one small metadata file to local disk and return its path."""
+        if self.mirror_root:
+            fs = self.new_fs()
+            local = Path(tempfile.gettempdir()) / "openpi_mirror" / self.repo_id / rel
+            local.parent.mkdir(parents=True, exist_ok=True)
+            fs.get(self.fs_path(rel), str(local))
+            return str(local)
+        from huggingface_hub import hf_hub_download
+
+        return hf_hub_download(self.repo_id, rel, repo_type="dataset")
 
     def _init_v21(self, info: dict, download) -> None:
         """v2.1 LeRobot: inline-image parquet, one episode per file, tasks.jsonl."""
@@ -380,11 +556,10 @@ class _HubSource:
         each episode, and which video file + timestamp range holds each camera's frames) plus
         ``meta/tasks.parquet``. Only canonical data files (referenced by an episode) are streamed.
         """
-        from huggingface_hub import HfFileSystem
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        fs = HfFileSystem()
+        fs = self.new_fs()
         features = info.get("features", {})
         self.data_path: str = info["data_path"]
         self.video_path: str = info["video_path"]
@@ -399,7 +574,7 @@ class _HubSource:
             for rel in rel_paths:
 
                 def _read(rel=rel):
-                    with fs.open(f"datasets/{self.repo_id}/{rel}", "rb") as fh:
+                    with fs.open(self.fs_path(rel), "rb") as fh:
                         return pq.ParquetFile(fh).read(columns=columns)
 
                 tables.append(retry_call(_read, what=f"reading {rel}"))
@@ -480,7 +655,9 @@ class _HubSource:
             # kept_files may include a boundary file that also holds a dropped episode; the stream filter
             # (kept_episodes membership) excludes that episode.
             self.kept_episodes = {int(e) for e in self._episode_index_sorted[:n]}
-            kept_files = {(int(c), int(f)) for c, f in zip(self._ep_data_chunk[:n], self._ep_data_file[:n], strict=True)}
+            kept_files = {
+                (int(c), int(f)) for c, f in zip(self._ep_data_chunk[:n], self._ep_data_file[:n], strict=True)
+            }
             self.files = [self.data_path.format(chunk_index=c, file_index=f) for c, f in sorted(kept_files)]
             self.total_frames = int(self.episode_length[:n].sum())
         else:
@@ -507,14 +684,11 @@ class _HubSource:
             video_key=raw_key, chunk_index=int(vid["chunk"][episode]), file_index=int(vid["file"][episode])
         )
         return (
-            f"datasets/{self.repo_id}/{path}",
+            self.fs_path(path),
             float(vid["from_ts"][episode]),
             float(vid["to_ts"][episode]),
             int(self.episode_length[episode]),
         )
-
-    def hf_paths(self, files: Sequence[str]) -> list[str]:
-        return [f"hf://datasets/{self.repo_id}/{rel}" for rel in files]
 
 
 def _v3_shard_plan(num_files: int, shard_id: int, num_shards: int) -> tuple[list[int], int, int]:
@@ -623,6 +797,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         joint_position_actions: bool = False,
         sampling_weights: Mapping[str, float] | None = None,
         max_episodes: Mapping[str, int] | None = None,
+        mirror_root: str | None = None,
     ):
         super().__init__()
         if isinstance(repo_ids, str):
@@ -637,6 +812,9 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         self.shuffle_buffer_size = max(1, int(shuffle_buffer_size))
         self.seed = int(seed)
         self.joint_position_actions = bool(joint_position_actions)
+        # When set (e.g. "gs://bucket/user/datasets"), read every repo from a mirror under
+        # <mirror_root>/<repo_id>/ instead of from the Hub. See _HubSource.
+        self.mirror_root: str | None = mirror_root.rstrip("/") if mirror_root else None
 
         # Explicit per-repo mixing weights (repo_id -> relative weight). Empty/None => size-proportional
         # mixing on frame counts (the default). When provided it must cover EXACTLY the repos in the
@@ -686,9 +864,12 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
 
         _streaming_used["value"] = True
 
-        # Fetch all Hub metadata up front (main process, before worker fork/spawn).
+        # Fetch all catalog metadata up front (main process, before worker fork/spawn).
+        if self.mirror_root:
+            logger.info("Streaming datasets from mirror %s (not the HuggingFace Hub).", self.mirror_root)
         self.sources: list[_HubSource] = [
-            _HubSource(repo_id, max_episodes=self.max_episodes.get(repo_id)) for repo_id in self.repo_ids
+            _HubSource(repo_id, max_episodes=self.max_episodes.get(repo_id), mirror_root=self.mirror_root)
+            for repo_id in self.repo_ids
         ]
 
         # Fail fast on a DDP layout where some rank would stream nothing and hang the collective -- e.g. a
@@ -706,11 +887,21 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         # Fail fast at construction (not at the first training batch) if prompts are required but a
         # repo's task metadata could not be loaded.
         if self.prompt_from_task:
-            missing = [source.repo_id for source in self.sources if not source.tasks]
+            # Name the file the source actually reads: v3.0 repos carry meta/tasks.parquet and have no
+            # tasks.jsonl at all, so a hardcoded "tasks.jsonl" sends you hunting for a file that was
+            # never missing -- when the real cause is almost always that the read FAILED (see the
+            # "Could not load ..." warning logged just above, e.g. the Hub 401/403-ing an anonymous
+            # stream), not that the dataset lacks task metadata.
+            missing = [
+                f"{source.repo_id} (meta/tasks.{'parquet' if source.is_v30 else 'jsonl'})"
+                for source in self.sources
+                if not source.tasks
+            ]
             if missing:
                 raise ValueError(
-                    f"prompt_from_task=True but no task metadata (meta/tasks.jsonl) could be loaded for "
-                    f"{missing}. Fix the dataset's tasks metadata or set prompt_from_task=False."
+                    f"prompt_from_task=True but no task metadata could be loaded for {missing}. Check the "
+                    f"log above for why the read failed; if the dataset genuinely has no tasks metadata, "
+                    f"fix it or set prompt_from_task=False."
                 )
 
         # Joint-position action training is only defined for v3.0 datasets, which expose a dedicated
@@ -778,7 +969,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         files = list(files)
         if self.shuffle:
             random.Random(base_seed).shuffle(files)
-        data_files = {"train": source.hf_paths(files)}
+        data_files = {"train": source.urls(files)}
         attempt = 0
         while True:
             try:
@@ -854,10 +1045,9 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
         degenerate empty file), we sleep before retrying rather than busy-looping on the Hub.
         ``num_episode_groups == 1`` (the default whole-file shard) emits every episode, unchanged.
         """
-        from huggingface_hub import HfFileSystem
         import pyarrow.parquet as pq
 
-        fs = HfFileSystem()
+        fs = source.new_fs()
         files = list(files)
         if self.shuffle:
             random.Random(base_seed).shuffle(files)
@@ -866,7 +1056,7 @@ class StreamingLeRobotDataset(torch.utils.data.IterableDataset):
             try:
                 produced = False
                 for rel in files:
-                    data_path = f"datasets/{source.repo_id}/{rel}"
+                    data_path = source.fs_path(rel)
 
                     def _read(data_path=data_path):
                         with fs.open(data_path, "rb") as fh:

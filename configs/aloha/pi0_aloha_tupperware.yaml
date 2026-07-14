@@ -1,0 +1,14 @@
+# pi0_aloha_tupperware
+data:
+  type: lerobot_aloha
+  assets:
+    asset_id: trossen
+  default_prompt: open the tupperware and put the food on the plate
+policy_metadata:
+  reset_pose:
+  - 0
+  - -1.5
+  - 1.5
+  - 0
+  - 0
+  - 0

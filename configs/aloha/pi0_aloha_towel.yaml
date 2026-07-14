@@ -1,0 +1,14 @@
+# pi0_aloha_towel
+data:
+  type: lerobot_aloha
+  assets:
+    asset_id: trossen
+  default_prompt: fold the towel
+policy_metadata:
+  reset_pose:
+  - 0
+  - -1.5
+  - 1.5
+  - 0
+  - 0
+  - 0

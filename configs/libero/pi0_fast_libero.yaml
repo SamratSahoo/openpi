@@ -1,0 +1,15 @@
+# pi0_fast_libero
+model:
+  type: pi0_fast
+  action_dim: 7
+  action_horizon: 10
+  max_token_len: 180
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi0_fast_base/params
+data:
+  type: lerobot_libero
+  repo_id: physical-intelligence/libero
+  base_config:
+    prompt_from_task: true
+  extra_delta_transform: true

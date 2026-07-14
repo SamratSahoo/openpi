@@ -1,0 +1,17 @@
+# pi05base-full-d100+toys100sim
+model:
+  type: pi0
+  action_horizon: 16
+  max_token_len: 200
+  pi05: true
+  discrete_state_input: true
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi05_base/params
+data:
+  type: lerobot_droid
+  repo_id: SamratSahoo/d100_toys100_sim
+  base_config:
+    prompt_from_task: true
+num_train_steps: 20000
+save_interval: 10000

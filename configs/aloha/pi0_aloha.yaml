@@ -1,0 +1,13 @@
+# pi0_aloha
+data:
+  type: lerobot_aloha
+  assets:
+    asset_id: trossen
+policy_metadata:
+  reset_pose:
+  - 0
+  - -1.5
+  - 1.5
+  - 0
+  - 0
+  - 0

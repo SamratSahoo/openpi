@@ -1,0 +1,19 @@
+# pi05_droid
+model:
+  type: pi0
+  action_horizon: 10
+  max_token_len: 200
+  pi05: true
+  discrete_state_input: true
+data:
+  type: simple
+  assets:
+    asset_id: droid
+  base_config:
+    prompt_from_task: true
+  data_transforms:
+    inputs:
+    - type: droid_inputs
+      model_type: PI05
+    outputs:
+    - type: droid_outputs

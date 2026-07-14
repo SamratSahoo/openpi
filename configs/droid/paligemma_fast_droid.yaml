@@ -1,0 +1,17 @@
+# paligemma_fast_droid
+model:
+  type: pi0_fast
+  action_dim: 8
+  action_horizon: 15
+data:
+  type: simple
+  assets:
+    asset_id: droid
+  base_config:
+    prompt_from_task: true
+  data_transforms:
+    inputs:
+    - type: droid_inputs
+      model_type: PI0_FAST
+    outputs:
+    - type: droid_outputs

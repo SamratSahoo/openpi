@@ -1,0 +1,15 @@
+# debug_restore
+exp_name: debug
+model:
+  type: pi0
+  max_token_len: 48
+  paligemma_variant: dummy
+  action_expert_variant: dummy
+  discrete_state_input: false
+weight_loader:
+  type: checkpoint
+  params_path: ./checkpoints/debug/debug/9/params
+batch_size: 2
+num_train_steps: 10
+overwrite: true
+wandb_enabled: false

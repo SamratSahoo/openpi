@@ -1,0 +1,10 @@
+# pi0_aloha_sim
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi0_base/params
+data:
+  type: lerobot_aloha
+  repo_id: lerobot/aloha_sim_transfer_cube_human
+  use_delta_joint_actions: false
+  default_prompt: Transfer cube
+num_train_steps: 20000

@@ -1,0 +1,19 @@
+# paligemma_diffusion_droid
+model:
+  type: pi0
+  action_dim: 8
+  action_horizon: 10
+  max_token_len: 48
+  discrete_state_input: false
+data:
+  type: simple
+  assets:
+    asset_id: droid
+  base_config:
+    prompt_from_task: true
+  data_transforms:
+    inputs:
+    - type: droid_inputs
+      model_type: PI0
+    outputs:
+    - type: droid_outputs

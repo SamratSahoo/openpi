@@ -1,0 +1,22 @@
+# pi0_aloha_pen_uncap
+weight_loader:
+  type: checkpoint
+  params_path: gs://openpi-assets/checkpoints/pi0_base/params
+data:
+  type: lerobot_aloha
+  repo_id: physical-intelligence/aloha_pen_uncap_diverse
+  assets:
+    assets_dir: gs://openpi-assets/checkpoints/pi0_base/assets
+    asset_id: trossen
+  default_prompt: uncap the pen
+  repack_transforms:
+    inputs:
+    - type: repack
+      structure:
+        images:
+          cam_high: observation.images.cam_high
+          cam_left_wrist: observation.images.cam_left_wrist
+          cam_right_wrist: observation.images.cam_right_wrist
+        state: observation.state
+        actions: action
+num_train_steps: 20000
