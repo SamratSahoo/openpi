@@ -1,9 +1,16 @@
+import inspect
 import logging
 import time
 from typing import Dict, Optional, Tuple
 
 from typing_extensions import override
 import websockets.sync.client
+
+# Automatic keepalive pings were only added to the *sync* client in websockets 14.0, where
+# `connect()` gained a `ping_interval` param. On older websockets (e.g. 13.1, the last release
+# supporting Python 3.8) the sync client sends no keepalive pings at all, and passing
+# `ping_interval` leaks into `socket.create_connection` and raises. Only pass it when supported.
+_CONNECT_SUPPORTS_PING_INTERVAL = "ping_interval" in inspect.signature(websockets.sync.client.connect).parameters
 
 from openpi_client import base_policy as _base_policy
 from openpi_client import msgpack_numpy
@@ -34,12 +41,15 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
         while True:
             try:
                 headers = {"Authorization": f"Api-Key {self._api_key}"} if self._api_key else None
-                conn = websockets.sync.client.connect(
-                    self._uri, compression=None, max_size=None, additional_headers=headers,
+                kwargs = {}
+                if _CONNECT_SUPPORTS_PING_INTERVAL:
                     # Disable keepalive pings: the request/response protocol doesn't need them,
                     # and the server's blocking first-inference XLA compile (can exceed the
-                    # 20s ping timeout) would otherwise drop the connection (1011).
-                    ping_interval=None,
+                    # 20s ping timeout) would otherwise drop the connection (1011). Older
+                    # websockets (<14) has no sync keepalive, so there is nothing to disable.
+                    kwargs["ping_interval"] = None
+                conn = websockets.sync.client.connect(
+                    self._uri, compression=None, max_size=None, additional_headers=headers, **kwargs,
                 )
                 metadata = msgpack_numpy.unpackb(conn.recv())
                 return conn, metadata
